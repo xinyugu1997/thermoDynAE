@@ -1,0 +1,302 @@
+import torch
+from torch import nn
+import numpy as np
+import os
+import time
+from itertools import chain
+
+# data_loader
+def data_pair_with_betaT(data_set, betaT):
+    data0 = data_set[:-1]
+    data1 = data_set[1:]
+    dataT = torch.full((len(data0), 1), betaT)
+    assert len(data0) == len(data1)
+    assert len(data0) == len(dataT)
+    
+    return data0.view((len(data0),-1)), data1.view((len(data1),-1)), dataT    
+    
+def data_split_train_test(data0, data1, dataT):
+    n_data = len(data0)
+    p = np.random.permutation(n_data)
+    data0 = data0[p]
+    data1 = data1[p]
+    dataT = dataT[p]
+    
+    train_set0 = data0[: (8*n_data)//10]
+    test_set0 = data0[(8*n_data)//10 :]
+    
+    train_set1 = data1[: (8*n_data)//10]
+    test_set1 = data1[(8*n_data)//10 :]
+    
+    train_setT = dataT[: (8*n_data)//10]
+    test_setT = dataT[(8*n_data)//10 :]
+    
+    return train_set0, test_set0, train_set1, test_set1, train_setT, test_setT
+    
+def sample_mini_batch(data0, data1, dataT, indices, device):
+    mini_data0 = data0[indices].to(device)
+    mini_data1 = data1[indices].to(device)
+    mini_dataT = dataT[indices].to(device)
+    
+    return mini_data0, mini_data1, mini_dataT
+
+
+# architecture
+class prior_model(nn.Module):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, neuron_num=32):
+        super().__init__()
+        self.z_dim = z_dim
+        self.device = device
+        self.neuron_num = neuron_num
+        self.ConstantDiffusionPrior = ConstantDiffusionPrior
+        
+        if ConstantDiffusionPrior:
+            print("Constant Diffusion!!")
+            self.constant_logM = nn.Parameter(torch.randn(1, z_dim))
+        
+        self.logA_net = nn.Sequential(
+            nn.Linear(z_dim, neuron_num),
+            nn.Tanh(),
+            nn.Linear(neuron_num, neuron_num),
+            nn.Tanh(),
+            nn.Linear(neuron_num, z_dim))
+        
+        self.logE_net = nn.Sequential(
+            nn.Linear(z_dim, neuron_num),
+            nn.Tanh(),
+            nn.Linear(neuron_num, neuron_num),
+            nn.Tanh(),
+            nn.Linear(neuron_num, z_dim))
+        
+        self.force_net = nn.Sequential(
+            nn.Linear(z_dim, neuron_num),
+            nn.Tanh(),
+            nn.Linear(neuron_num, neuron_num),
+            nn.Tanh(),
+            nn.Linear(neuron_num, z_dim))
+    
+    def prior_logA(self, z):
+        return self.logA_net(z)
+    
+    def prior_logE(self, z):
+        return self.logE_net(z)
+    
+    def prior_force(self, z):
+        return self.force_net(z)
+    
+    def prior_loss(self, z0, z1, betaT):
+        z0 = z0.detach()
+        z0.requires_grad = True
+        
+        force = self.prior_force(z0)
+        
+        if self.ConstantDiffusionPrior:
+            logM = self.constant_logM
+            M = torch.exp(logM)
+            prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force, 2)/M, dim=1)        
+            
+        else:
+            logA = self.prior_logA(z0)
+            logE = self.prior_logE(z0)
+
+            E = torch.exp(logE)
+            D_factor = torch.exp(-betaT*E)
+            A = torch.exp(logA)
+            M = A*D_factor
+            logM = logA - betaT*E
+
+            logA_grad = []
+            for i in range(self.z_dim):
+                logA_i = logA[:,i]
+                logA_grad += [torch.autograd.grad(logA_i.sum(),z0,retain_graph=True)[0][:,i]]
+            A_grad = torch.stack(logA_grad, dim=-1) * A
+
+            logE_grad = []
+            for i in range(self.z_dim):
+                logE_i = logE[:,i]
+                logE_grad += [torch.autograd.grad(logE_i.sum(),z0,retain_graph=True)[0][:,i]]
+            E_grad = torch.stack(logE_grad, dim=-1) * E
+
+            M_grad = D_factor*A_grad - betaT * M * E_grad
+
+            prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force+ M_grad/betaT, 2)/M, dim=1)
+        
+        return prior_loss
+    
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5*logvar)
+        return mu + std * torch.randn_like(mu)
+    
+    def Langevin_Forward(self, z0, betaT, dt_infer):
+        z0 = z0.detach()
+        z0.requires_grad = True        
+        if dt_infer != 1:
+            raise NotImplementedError
+            
+        force = self.prior_force(z0)
+        
+        if self.ConstantDiffusionPrior:
+            logM = self.constant_logM
+            M = torch.exp(logM) 
+            z1 = z0 + self.reparameterize(M*force, logM-np.log(betaT/2))
+            
+        else:
+            logA = self.prior_logA(z0)
+            logE = self.prior_logE(z0)        
+
+            E = torch.exp(logE)
+            D_factor = torch.exp(-betaT*E)
+            A = torch.exp(logA)
+            M = A*D_factor
+            logM = logA - betaT*E
+
+            logA_grad = []
+            for i in range(self.z_dim):
+                logA_i = logA[:,i]
+                logA_grad += [torch.autograd.grad(logA_i.sum(),z0,retain_graph=True)[0][:,i]]
+            A_grad = torch.stack(logA_grad, dim=-1) * A
+
+            logE_grad = []
+            for i in range(self.z_dim):
+                logE_i = logE[:,i]
+                logE_grad += [torch.autograd.grad(logE_i.sum(),z0,retain_graph=True)[0][:,i]]
+            E_grad = torch.stack(logE_grad, dim=-1) * E
+
+            M_grad = D_factor*A_grad - betaT * M * E_grad    
+
+            z1 = z0 + self.reparameterize(M*force+ M_grad/betaT, logM-np.log(betaT/2))
+        
+        return z1
+
+    def evolve_latent_dynamics(self, z_init, betaT_infer, infer_steps, dt_infer=1):
+        traj = []
+        z0 = z_init.clone()
+        z0 = z0.view((-1,self.z_dim))
+        betaT = torch.full_like(z0, betaT_infer)
+        for istep in range(infer_steps):
+            if istep % 1000 == 0:
+                print('Step:', istep, 'Temp:', betaT_infer)
+            z1 = self.Langevin_Forward(z0, betaT, dt_infer)
+            z0 = z1.detach()
+            traj.append(z0)
+            
+        return traj       
+    
+    
+    def train_model(self, train_set0, test_set0, train_set1, test_set1, train_setT, test_setT, 
+                    infer_set0, infer_set1, infer_setT, prior_learning_rate, batch_size, max_epochs, 
+                    output_path, log_interval, SaveTrainingProgress, lr_scheduler_step_size, lr_scheduler_gamma, beta_MSE):
+        self.train()
+
+        step = 0        # steps of model updates
+        start = time.time()
+        os.makedirs(output_path,exist_ok=True)
+        log_path = output_path + '/log.txt'
+        model_path = output_path + '/prior_model'
+        os.makedirs(model_path,exist_ok=True)
+
+        epoch = 0        # cycles of training data set 
+
+        #setup optimizer
+        prior_optimizer = torch.optim.Adam(self.parameters(),lr=prior_learning_rate,)
+        
+        
+        
+        
+        prior_scheduler = torch.optim.lr_scheduler.StepLR(prior_optimizer, step_size=lr_scheduler_step_size,
+                                                    gamma=lr_scheduler_gamma)
+        
+        
+        
+        while epoch < max_epochs:
+            train_permutation = torch.randperm(train_set0.shape[0])
+            test_permutation = torch.randperm(test_set0.shape[0])
+            infer_permutation = torch.randperm(infer_set0.shape[0])
+            
+            for i in range(0, len(train_permutation), batch_size):
+                step += 1
+                if (i+batch_size) > len(train_permutation):
+                    print(i+batch_size, len(train_permutation))
+                    break
+                
+                train_indices = train_permutation[i:(i+batch_size)]
+                z0, z1, temp = sample_mini_batch(train_set0, train_set1, train_setT, train_indices, self.device)  # call function from utils
+                train_loss = self.prior_loss(z0, z1, temp).mean()
+                
+                #MSE reconstruction loss
+                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                train_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()                
+                
+                if (torch.isnan(train_loss).any()):
+                    print("NAN in training loss")
+                    print(train_loss)
+                    return True
+                
+                prior_optimizer.zero_grad()
+                train_loss.backward()
+                prior_optimizer.step()
+                
+                if step % log_interval == 0:  #output log every 500 steps
+                    train_time = time.time() - start
+                    
+                    print(f"Iteration {step}:\tTime {train_time} s\nPrior loss (train) {train_loss}")
+                    print(f"Iteration {step}:\tTime {train_time} s\nPrior loss (train) {train_loss}", 
+                          file=open(log_path,'a'))
+                    
+                    j = i%len(test_permutation)
+                    if (j+batch_size) > len(test_permutation):
+                        j = len(test_permutation) - batch_size
+                        
+                    test_indices = test_permutation[j:(j+batch_size)]
+                    z0, z1, temp = sample_mini_batch(test_set0, test_set1, test_setT, test_indices, self.device)  # call function from utils
+                    test_loss = self.prior_loss(z0, z1, temp).mean()
+                    # MSE loss
+                    z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                    test_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
+                    
+                    print(f"Prior loss (test) {test_loss}")
+                    print(f"Prior loss (test) {test_loss}", file=open(log_path,'a'))
+                    
+                    k = i%len(infer_permutation)
+                    if (k+batch_size) > len(infer_permutation):
+                        k = len(infer_permutation) - batch_size
+                        
+                    infer_indices = infer_permutation[k:(k+batch_size)]
+                    z0, z1, temp = sample_mini_batch(infer_set0, infer_set1, infer_setT, infer_indices, self.device)  # call function from utils
+                    infer_loss = self.prior_loss(z0, z1, temp).mean()
+                    # MSE loss
+                    z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                    infer_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
+                    
+                    print(f"Prior loss (infer) {infer_loss}")
+                    print(f"Prior loss (infer) {infer_loss}", file=open(log_path,'a'))                   
+                    
+                
+            epoch += 1
+            prior_scheduler.step()
+            if prior_scheduler.gamma < 1:
+                print("Update lr to %f" % (prior_optimizer.param_groups[0]['lr']))
+                print("Update lr to %f" % (prior_optimizer.param_groups[0]['lr']), file=open(log_path, 'a'))
+            
+            if SaveTrainingProgress:
+                if epoch % 10 == 0:
+                    # self.eval()
+                    # for i in range(len(input_data_list)):
+                    #     self.save_traj_results(input_data_list[i], batch_size, output_path + '_epoch%d' % epoch, False, i, index)
+                    # self.train()
+                    torch.save({'epoch': epoch,
+                                'state_dict': self.state_dict()}, model_path + f'/model_{epoch}_cpt.pt')
+                    
+            print(f"Epoch: {epoch}\n")
+            print(f"Epoch: {epoch}\n", file=open(log_path, 'a'))
+                
+
+
+        total_training_time = time.time() - start
+        print(f"Total training time: {total_training_time} s")
+        print(f"Total training time: {total_training_time} s", file=open(log_path, 'a'))
+        torch.save({'epoch': epoch,
+            'state_dict': self.state_dict()}, model_path + f'/model_final_cpt.pt')
+        
+        return False
+                
