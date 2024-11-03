@@ -190,27 +190,27 @@ class prior_model(nn.Module):
         if log_path!=None:
             start_time = time.time()
 
-        # obtain the latent representation and its corresponding diffusion matrix
-        train_all_z = []
-        for i in range(0, len(train_input_data), batch_size):
-            batch_inputs = train_input_data[i:i + batch_size].to(self.device)
-
-            # pass through VAE
-            z = self.encode(batch_inputs)
-
-            train_all_z += [z.cpu()]
-
-        train_all_z = torch.cat(train_all_z, dim=0)
-
-        test_all_z = []
-        for i in range(0, len(test_input_data), batch_size):
-            batch_inputs = test_input_data[i:i + batch_size].to(self.device)
-
-            # pass through VAE
-            z = self.encode(batch_inputs)
-            test_all_z += [z.cpu()]
-
-        test_all_z = torch.cat(test_all_z, dim=0)
+#        # obtain the latent representation
+#        train_all_z = []
+#        for i in range(0, len(train_input_data), batch_size):
+#            batch_inputs = train_input_data[i:i + batch_size].to(self.device)
+#
+#            # pass through VAE
+#            z = self.encode(batch_inputs)
+#
+#            train_all_z += [z.cpu()]
+#
+#        train_all_z = torch.cat(train_all_z, dim=0)
+#
+#        test_all_z = []
+#        for i in range(0, len(test_input_data), batch_size):
+#            batch_inputs = test_input_data[i:i + batch_size].to(self.device)
+#
+#            # pass through VAE
+#            z = self.encode(batch_inputs)
+#            test_all_z += [z.cpu()]
+#
+#        test_all_z = torch.cat(test_all_z, dim=0)
 
         # dicretize the latent space into bins
         cluster_centers = utils.RegSpaceClustering(train_all_z, self.min_dist)
