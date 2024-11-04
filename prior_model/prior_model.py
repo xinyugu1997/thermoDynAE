@@ -44,11 +44,12 @@ def sample_mini_batch(data0, data1, dataT, indices, device):
 
 # architecture
 class prior_model(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, neuron_num=32):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, neuron_num=32, bias_factor=10):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
         self.neuron_num = neuron_num
+        self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
         
         if ConstantDiffusionPrior:
@@ -185,7 +186,7 @@ class prior_model(nn.Module):
 
 
     @torch.no_grad()
-    def get_cluster_centers(self, train_input_data, test_input_data, batch_size=128, save_centers=False, log_path=None):
+    def get_cluster_centers(self, train_input_data, test_input_data, infer_input_data, batch_size=128, save_centers=False, log_path=None):
         # This function generates the cluster centers from regular space clustering
 
         if log_path!=None:
@@ -212,9 +213,15 @@ class prior_model(nn.Module):
 #            test_all_z += [z.cpu()]
 #
 #        test_all_z = torch.cat(test_all_z, dim=0)
+#
+	# for training latent prior model only
+        train_all_z = train_input_data
+        test_all_z = test_input_data
+        infer_all_z = infer_input_data
 
         # dicretize the latent space into bins
-        cluster_centers = utils.RegSpaceClustering(train_all_z, self.min_dist)
+        cluster_centers = utils.RegSpaceClustering(train_all_z)
+	
 
         # obtain the cluster labels
         train_distance_matrix = torch.sqrt((torch.square(train_all_z.unsqueeze(1) - cluster_centers.unsqueeze(0))).sum(dim=-1))
@@ -222,6 +229,10 @@ class prior_model(nn.Module):
 
         test_distance_matrix = torch.sqrt((torch.square(test_all_z.unsqueeze(1) - cluster_centers.unsqueeze(0))).sum(dim=-1))
         test_cluster_labels = torch.argmin(test_distance_matrix, dim=1)
+
+        infer_distance_matrix = torch.sqrt((torch.square(infer_all_z.unsqueeze(1) - cluster_centers.unsqueeze(0))).sum(dim=-1))
+        infer_cluster_labels = torch.argmin(infer_distance_matrix, dim=1)
+
 
         if log_path!=None:
             elapsed_time = time.time() - start_time
@@ -232,12 +243,12 @@ class prior_model(nn.Module):
             print('%i cluster centers detected' % len(cluster_centers) + '\n', file=open(log_path, 'a'))
 
         if save_centers:
-            return train_cluster_labels, test_cluster_labels, cluster_centers
+            return train_cluster_labels, test_cluster_labels, infer_cluster_labels, cluster_centers
 
         else:
-            return train_cluster_labels, test_cluster_labels
+            return train_cluster_labels, test_cluster_labels, infer_cluster_labels
 
-    def resampling(self, train_past_data0, test_past_data0, batch_size, save_centers, output_path, log_path, index):
+    def resampling(self, train_past_data0, test_past_data0, infer_past_data0, save_centers, output_path, log_path, index, batch_size=32):
         '''
         Uniformly discretizing the latent space and resampling the dataset based on a well-tempered distribution.
             Args:
@@ -254,13 +265,13 @@ class prior_model(nn.Module):
         '''
 
         # discretize the latent space into bins using regular clustering
-        output_variables = self.get_cluster_centers(train_past_data0, test_past_data0, batch_size, save_centers, log_path)
+        output_variables = self.get_cluster_centers(train_past_data0, test_past_data0, infer_past_data0, save_centers, log_path)
 
-        train_cluster_labels, test_cluster_labels = output_variables[0], output_variables[1]
+        train_cluster_labels, test_cluster_labels, infer_cluster_labels = output_variables[0], output_variables[1], output_variables[2]
 
         # output z cluster centers
         if save_centers:
-            cluster_centers = output_variables[2]
+            cluster_centers = output_variables[3]
             z_cluster_center_path = output_path + '_z_cluster_centers' + str(index) + '.npy'
             np.save(z_cluster_center_path, cluster_centers.cpu().data.numpy())
 
@@ -272,12 +283,14 @@ class prior_model(nn.Module):
         total_weights = 0
         train_cluster_indices = []
         test_cluster_indices = []
+        infer_cluster_indices = []
 
         total_effective_samples = 0
 
         for k in range(num_cluster):
             train_cluster_indices += [torch.nonzero(train_cluster_labels == k, as_tuple=True)[0]]
             test_cluster_indices += [torch.nonzero(test_cluster_labels == k, as_tuple=True)[0]]
+            infer_cluster_indices += [torch.nonzero(infer_cluster_labels == k, as_tuple=True)[0]]
 
             if len(train_cluster_indices[k]) > batch_size:
                 total_effective_samples += len(train_cluster_indices[k])
@@ -294,41 +307,59 @@ class prior_model(nn.Module):
         # create better dataset by resampling from each bin
         train_dataset_indices = []
         test_dataset_indices = []
+        infer_dataset_indices = []
 
         for k in range(num_cluster):
             train_dataset_size = int(train_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
             test_dataset_size = int(test_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
+            infer_dataset_size = int(infer_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
 
             if len(train_cluster_indices[k]) > train_dataset_size:
                 train_dataset_indices += [train_cluster_indices[k][
                                               torch.randperm(len(train_cluster_indices[k]))[
                                               :train_dataset_size]]]
-            elif len(train_cluster_indices[k]) > batch_size:
-                size = train_cluster_indices[k].shape[0] // batch_size * batch_size
+#            elif len(train_cluster_indices[k]) > batch_size:
+#                size = train_cluster_indices[k].shape[0] // batch_size * batch_size
+            else:
                 for i in range((train_dataset_size) // train_cluster_indices[k].shape[0]):
                     train_dataset_indices += [
                         train_cluster_indices[k][
-                            torch.randperm(len(train_cluster_indices[k]))[:size]]]
+                            torch.randperm(len(train_cluster_indices[k]))]]#[:size]]]
 
             if len(test_cluster_indices[k]) > test_dataset_size:
                 test_dataset_indices += [test_cluster_indices[k][
                                              torch.randperm(len(test_cluster_indices[k]))[
                                              :test_dataset_size]]]
-            elif len(test_cluster_indices[k]) > batch_size:
-                size = test_cluster_indices[k].shape[0] // batch_size * batch_size
+#            elif len(test_cluster_indices[k]) > batch_size:
+#                size = test_cluster_indices[k].shape[0] // batch_size * batch_size
+            else:
                 for i in range(test_dataset_size // test_cluster_indices[k].shape[0]):
                     test_dataset_indices += [
-                        test_cluster_indices[k][torch.randperm(len(test_cluster_indices[k]))[:size]]]
+                        test_cluster_indices[k][torch.randperm(len(test_cluster_indices[k]))]]#[:size]]]
 
-        train_dataset_indices = torch.cat(train_dataset_indices, dim=0).reshape((-1, batch_size))
-        test_dataset_indices = torch.cat(test_dataset_indices, dim=0).reshape((-1, batch_size))
+
+            if len(infer_cluster_indices[k]) > infer_dataset_size:
+                infer_dataset_indices += [infer_cluster_indices[k][
+                                             torch.randperm(len(infer_cluster_indices[k]))[
+                                             :infer_dataset_size]]]
+            else:
+                for i in range(infer_dataset_size // infer_cluster_indices[k].shape[0]):
+                    infer_dataset_indices += [
+                        infer_cluster_indices[k][torch.randperm(len(infer_cluster_indices[k]))]]
+
+
+        train_dataset_indices = torch.cat(train_dataset_indices, dim=0)#.reshape((-1, batch_size))
+        test_dataset_indices = torch.cat(test_dataset_indices, dim=0)#.reshape((-1, batch_size))
+        infer_dataset_indices = torch.cat(infer_dataset_indices, dim=0)
 
         train_indices = train_dataset_indices[
             torch.randperm((train_dataset_indices).shape[0])].flatten()
         test_indices = test_dataset_indices[
             torch.randperm((test_dataset_indices).shape[0])].flatten()
+        infer_indices = infer_dataset_indices[
+            torch.randperm((infer_dataset_indices).shape[0])].flatten()
 
-        return train_indices, test_indices
+        return train_indices, test_indices, infer_indices
  
     
     def train_model(self, train_set0, test_set0, train_set1, test_set1, train_setT, test_setT, 

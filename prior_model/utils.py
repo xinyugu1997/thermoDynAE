@@ -122,7 +122,7 @@ def rand_uniform(batch_size, dim):
     return torch.from_numpy(z).type(torch.FloatTensor)
 
 @torch.no_grad()
-def RegSapceClustering(z_data, min_dist=1, min_centers=400, batch_size=128, dist_decay=0.9):
+def RegSpaceClustering(z_data, min_dist=1, min_centers=200, batch_size=128, dist_decay=0.9):
     '''
     Regular space clustering.
         Args:
