@@ -122,40 +122,33 @@ def rand_uniform(batch_size, dim):
     return torch.from_numpy(z).type(torch.FloatTensor)
 
 @torch.no_grad()
-def RegSpaceClustering(z_data, min_dist, max_centers=200, batch_size=128):
+def RegSapceClustering(z_data, min_dist=1, min_centers=400, batch_size=128, dist_decay=0.9):
     '''
     Regular space clustering.
         Args:
             z_data: ndarray containing (n,d)-shaped float data
-            max_centers: the maximum number of cluster centers to be determined, integer greater than 0 required
+            min_centers: the minimum number of cluster centers to be determined, integer greater than 0 required
             min_dist: the minimal distances between cluster centers
 
         Returns:
-            center_list: ndarray containing the cluster centers
+            cluster_centers: ndarray containing the cluster centers
     '''
-
-    num_observations, d = z_data.shape
-
-    p = np.random.permutation(num_observations)
-    data = z_data[p]
-
-    center_list = data[0:1, :].clone()
-
-    i = 1
-    while i < num_observations:
-        x_active = data[i:i+batch_size, :]
-        distances = torch.sqrt((torch.square(center_list.unsqueeze(0) - x_active.unsqueeze(1))).sum(dim=-1))
-        indice = torch.nonzero(torch.all(distances > min_dist, dim=-1), as_tuple=True)[0]
-        if len(indice) > 0:
-            # the first element will be used
-            center_list = torch.cat((center_list, x_active[indice[0]].reshape(1, d)), 0)
-            i += indice[0]
-        else:
-            i += batch_size
-
-        if len(center_list) >= max_centers:
-            print("Exceed the maximum number of cluster centers!\n")
-            print("Please increase dmin!\n")
-            raise ValueError
-
-    return center_list
+    n_samples, z_dim = z_data.shape    
+    cluster_centers = z_data[0:1,:].clone()
+    
+    while len(cluster_centers) < min_centers:
+        cluster_centers = z_data[0:1,:].clone()
+        i = 1
+        while i < n_samples:
+            batch = z_data[i:min(i+batch_size, n_samples)]
+            dist = torch.sqrt(torch.square(batch.unsqueeze(1)-cluster_centers.unsqueeze(0)).sum(-1))
+            indices = torch.nonzero(torch.all(dist>min_dist, dim=-1), as_tuple=True)[0]
+            if len(indices) > 0:
+                cluster_centers = torch.cat((cluster_centers, batch[indices[0]].reshape(1,z_dim)), dim=0)
+                i += indices[0]
+            else:
+                i += batch_size                
+        
+        min_dist = min_dist*dist_decay
+        
+    return cluster_centers 

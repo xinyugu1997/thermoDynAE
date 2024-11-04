@@ -4,6 +4,7 @@ import numpy as np
 import os
 import time
 from itertools import chain
+import utils
 
 # data_loader
 def data_pair_with_betaT(data_set, betaT):
