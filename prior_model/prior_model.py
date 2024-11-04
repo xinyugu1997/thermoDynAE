@@ -248,7 +248,7 @@ class prior_model(nn.Module):
         else:
             return train_cluster_labels, test_cluster_labels, infer_cluster_labels
 
-    def resampling(self, train_past_data0, test_past_data0, infer_past_data0, save_centers, output_path, log_path, index, batch_size=32):
+    def resampling(self, train_past_data0, test_past_data0, infer_past_data0, save_centers, output_path, log_path, index=0, batch_size=32):
         '''
         Uniformly discretizing the latent space and resampling the dataset based on a well-tempered distribution.
             Args:
@@ -379,19 +379,18 @@ class prior_model(nn.Module):
         #setup optimizer
         prior_optimizer = torch.optim.Adam(self.parameters(),lr=prior_learning_rate,)
         
-        
-        
-        
         prior_scheduler = torch.optim.lr_scheduler.StepLR(prior_optimizer, step_size=lr_scheduler_step_size,
                                                     gamma=lr_scheduler_gamma)
         
         
-        
         while epoch < max_epochs:
-            train_permutation = torch.randperm(train_set0.shape[0])
-            test_permutation = torch.randperm(test_set0.shape[0])
-            infer_permutation = torch.randperm(infer_set0.shape[0])
-            
+            if epoch == 0:
+                train_permutation = torch.randperm(train_set0.shape[0])
+                test_permutation = torch.randperm(test_set0.shape[0])
+                infer_permutation = torch.randperm(infer_set0.shape[0])
+            elif epoch == 1:
+                train_permutation, test_permutation, infer_permutation = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path, log_path)
+
             for i in range(0, len(train_permutation), batch_size):
                 step += 1
                 if (i+batch_size) > len(train_permutation):
@@ -403,8 +402,9 @@ class prior_model(nn.Module):
                 train_loss = self.prior_loss(z0, z1, temp).mean()
                 
                 #MSE reconstruction loss
-                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                train_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()                
+                if beta_MSE > 0:
+                    z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                    train_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()                
                 
                 if (torch.isnan(train_loss).any()):
                     print("NAN in training loss")
@@ -430,8 +430,9 @@ class prior_model(nn.Module):
                     z0, z1, temp = sample_mini_batch(test_set0, test_set1, test_setT, test_indices, self.device)  # call function from utils
                     test_loss = self.prior_loss(z0, z1, temp).mean()
                     # MSE loss
-                    z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                    test_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
+                    if beta_MSE > 0:
+                        z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                        test_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
                     
                     print(f"Prior loss (test) {test_loss}")
                     print(f"Prior loss (test) {test_loss}", file=open(log_path,'a'))
@@ -444,8 +445,9 @@ class prior_model(nn.Module):
                     z0, z1, temp = sample_mini_batch(infer_set0, infer_set1, infer_setT, infer_indices, self.device)  # call function from utils
                     infer_loss = self.prior_loss(z0, z1, temp).mean()
                     # MSE loss
-                    z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                    infer_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
+                    if beta_MSE > 0:
+                        z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                        infer_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
                     
                     print(f"Prior loss (infer) {infer_loss}")
                     print(f"Prior loss (infer) {infer_loss}", file=open(log_path,'a'))                   
