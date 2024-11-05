@@ -382,14 +382,17 @@ class prior_model(nn.Module):
         prior_scheduler = torch.optim.lr_scheduler.StepLR(prior_optimizer, step_size=lr_scheduler_step_size,
                                                     gamma=lr_scheduler_gamma)
         
-        
+        train_resample, test_resample, infer_resample = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path, log_path) 
         while epoch < max_epochs:
             if epoch == 0:
                 train_permutation = torch.randperm(train_set0.shape[0])
                 test_permutation = torch.randperm(test_set0.shape[0])
                 infer_permutation = torch.randperm(infer_set0.shape[0])
-            elif epoch == 1:
-                train_permutation, test_permutation, infer_permutation = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path, log_path)
+            else:
+                train_permutation = train_resample[torch.randperm((train_resample).shape[0])] 
+                test_permutation = test_resample[torch.randperm((test_resample).shape[0])]
+                infer_permutation = infer_resample[torch.randperm((infer_resample).shape[0])]
+
 
             for i in range(0, len(train_permutation), batch_size):
                 step += 1
