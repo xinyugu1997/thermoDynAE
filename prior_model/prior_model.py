@@ -276,7 +276,6 @@ class prior_model(nn.Module):
             np.save(z_cluster_center_path, cluster_centers.cpu().data.numpy())
 
         num_cluster = int(torch.max(train_cluster_labels).cpu().numpy()) + 1
-
         # draw samples based on the bias factor (>=1)
         # n_k' ~ n_k^(1/bias_factor)
         cluster_weights = []
@@ -332,7 +331,7 @@ class prior_model(nn.Module):
                                              :test_dataset_size]]]
 #            elif len(test_cluster_indices[k]) > batch_size:
 #                size = test_cluster_indices[k].shape[0] // batch_size * batch_size
-            else:
+            elif test_cluster_indices[k].shape[0] > 0:
                 for i in range(test_dataset_size // test_cluster_indices[k].shape[0]):
                     test_dataset_indices += [
                         test_cluster_indices[k][torch.randperm(len(test_cluster_indices[k]))]]#[:size]]]
@@ -342,7 +341,7 @@ class prior_model(nn.Module):
                 infer_dataset_indices += [infer_cluster_indices[k][
                                              torch.randperm(len(infer_cluster_indices[k]))[
                                              :infer_dataset_size]]]
-            else:
+            elif infer_cluster_indices[k].shape[0] > 0:
                 for i in range(infer_dataset_size // infer_cluster_indices[k].shape[0]):
                     infer_dataset_indices += [
                         infer_cluster_indices[k][torch.randperm(len(infer_cluster_indices[k]))]]
@@ -382,7 +381,7 @@ class prior_model(nn.Module):
         prior_scheduler = torch.optim.lr_scheduler.StepLR(prior_optimizer, step_size=lr_scheduler_step_size,
                                                     gamma=lr_scheduler_gamma)
         
-        train_resample, test_resample, infer_resample = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path, log_path) 
+        train_resample, test_resample, infer_resample = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path=output_path, log_path=log_path) 
         while epoch < max_epochs:
             if epoch == 0:
                 train_permutation = torch.randperm(train_set0.shape[0])
@@ -483,4 +482,68 @@ class prior_model(nn.Module):
             'state_dict': self.state_dict()}, model_path + f'/model_final_cpt.pt')
         
         return False
-                
+        
+    def output_result(self, train_set0, test_set0, train_set1, test_set1, train_setT, test_setT,
+                    infer_set0, infer_set1, infer_setT, beta_MSE, outputfile, batch_size=32):
+
+        train_resample, test_resample, infer_resample = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path=None, log_path=outputfile)
+        train_permutation = train_resample[torch.randperm((train_resample).shape[0])]
+        test_permutation = test_resample[torch.randperm((test_resample).shape[0])]
+        infer_permutation = infer_resample[torch.randperm((infer_resample).shape[0])]
+
+        train_prior_loss = []
+        test_prior_loss = []
+        infer_prior_loss = []
+        train_mse_loss = []
+        test_mse_loss = []
+        infer_mse_loss = []
+        for i in range(0, len(train_permutation), batch_size):
+            if (i+batch_size) > len(train_permutation):
+                print(i+batch_size, len(train_permutation))
+                break
+
+            train_indices = train_permutation[i:(i+batch_size)]
+            z0, z1, temp = sample_mini_batch(train_set0, train_set1, train_setT, train_indices, self.device)  # call function from utils
+            train_prior_loss += [self.prior_loss(z0, z1, temp).mean().cpu().numpy()]
+
+            #MSE reconstruction loss
+            if beta_MSE > 0:
+                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                train_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().cpu().numpy()]
+        train_prior_loss = np.mean(train_prior_loss)
+        train_mse_loss = np.mean(train_mse_loss)
+
+        for i in range(0, len(test_permutation), batch_size):
+            if (i+batch_size) > len(test_permutation):
+                print(i+batch_size, len(test_permutation))
+                break
+
+            test_indices = test_permutation[i:(i+batch_size)]
+            z0, z1, temp = sample_mini_batch(test_set0, test_set1, test_setT, test_indices, self.device)  # call function from utils
+            test_prior_loss += [self.prior_loss(z0, z1, temp).mean().cpu().numpy()]
+
+            #MSE reconstruction loss
+            if beta_MSE > 0:
+                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                test_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().cpu().numpy()]
+        test_prior_loss = np.mean(test_prior_loss)
+        test_mse_loss = np.mean(test_mse_loss)
+
+
+        for i in range(0, len(infer_permutation), batch_size):
+            if (i+batch_size) > len(infer_permutation):
+                print(i+batch_size, len(infer_permutation))
+                break
+
+            infer_indices = infer_permutation[i:(i+batch_size)]
+            z0, z1, temp = sample_mini_batch(infer_set0, infer_set1, infer_setT, infer_indices, self.device)  # call function from utils
+            infer_prior_loss += [self.prior_loss(z0, z1, temp).mean().cpu().numpy()]
+
+            #MSE reconstruction loss
+            if beta_MSE > 0:
+                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
+                infer_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().cpu().numpy()]
+        infer_prior_loss = np.mean(infer_prior_loss)
+        infer_mse_loss = np.mean(infer_mse_loss)    
+
+        print(f"Total training time: {total_training_time} s", file=open(outputfile, 'a'))
