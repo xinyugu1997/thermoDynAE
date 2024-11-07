@@ -546,4 +546,15 @@ class prior_model(nn.Module):
         infer_prior_loss = np.mean(infer_prior_loss)
         infer_mse_loss = np.mean(infer_mse_loss)    
 
-        print(f"Total training time: {total_training_time} s", file=open(outputfile, 'a'))
+        print(f"beta_MSE = {beta_MSE}", file=open(outputfile, 'a'))
+
+        print(f"train_prior_loss: {train_prior_loss}", file=open(outputfile, 'a'))
+        print(f"test_prior_loss: {test_prior_loss}", file=open(outputfile, 'a'))
+        print(f"infer_prior_loss: {infer_prior_loss}", file=open(outputfile, 'a'))
+
+        print(f"train_mse_loss: {train_mse_loss}", file=open(outputfile, 'a'))
+        print(f"test_mse_loss: {test_mse_loss}", file=open(outputfile, 'a'))
+        print(f"infer_mse_loss: {infer_mse_loss}", file=open(outputfile, 'a'))
+
+        return False
+
