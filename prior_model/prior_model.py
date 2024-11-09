@@ -504,12 +504,12 @@ class prior_model(nn.Module):
 
             train_indices = train_permutation[i:(i+batch_size)]
             z0, z1, temp = sample_mini_batch(train_set0, train_set1, train_setT, train_indices, self.device)  # call function from utils
-            train_prior_loss += [self.prior_loss(z0, z1, temp).mean().cpu().numpy()]
+            train_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
 
             #MSE reconstruction loss
             if beta_MSE > 0:
                 z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                train_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().cpu().numpy()]
+                train_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().detach().cpu().numpy()]
         train_prior_loss = np.mean(train_prior_loss)
         train_mse_loss = np.mean(train_mse_loss)
 
@@ -520,12 +520,12 @@ class prior_model(nn.Module):
 
             test_indices = test_permutation[i:(i+batch_size)]
             z0, z1, temp = sample_mini_batch(test_set0, test_set1, test_setT, test_indices, self.device)  # call function from utils
-            test_prior_loss += [self.prior_loss(z0, z1, temp).mean().cpu().numpy()]
+            test_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
 
             #MSE reconstruction loss
             if beta_MSE > 0:
                 z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                test_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().cpu().numpy()]
+                test_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().detach().cpu().numpy()]
         test_prior_loss = np.mean(test_prior_loss)
         test_mse_loss = np.mean(test_mse_loss)
 
@@ -537,12 +537,12 @@ class prior_model(nn.Module):
 
             infer_indices = infer_permutation[i:(i+batch_size)]
             z0, z1, temp = sample_mini_batch(infer_set0, infer_set1, infer_setT, infer_indices, self.device)  # call function from utils
-            infer_prior_loss += [self.prior_loss(z0, z1, temp).mean().cpu().numpy()]
+            infer_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
 
             #MSE reconstruction loss
             if beta_MSE > 0:
                 z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                infer_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().cpu().numpy()]
+                infer_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().detach().cpu().numpy()]
         infer_prior_loss = np.mean(infer_prior_loss)
         infer_mse_loss = np.mean(infer_mse_loss)    
 
