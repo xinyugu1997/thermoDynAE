@@ -44,7 +44,7 @@ def sample_mini_batch(data0, data1, dataT, indices, device):
 
 # architecture
 class prior_model(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, neuron_num=32, bias_factor=10):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, neuron_num=32, bias_factor=3):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
@@ -68,7 +68,8 @@ class prior_model(nn.Module):
             nn.Tanh(),
             nn.Linear(neuron_num, neuron_num),
             nn.Tanh(),
-            nn.Linear(neuron_num, z_dim))
+            nn.Linear(neuron_num, z_dim)
+            nn.ReLU())
         
         self.force_net = nn.Sequential(
             nn.Linear(z_dim, neuron_num),
@@ -102,10 +103,10 @@ class prior_model(nn.Module):
             logE = self.prior_logE(z0)
 
             E = torch.exp(logE)
-            D_factor = torch.exp(-betaT*E)
+            D_factor = torch.pow(E,-betaT)#torch.exp(-betaT*E)
             A = torch.exp(logA)
             M = A*D_factor
-            logM = logA - betaT*E
+            logM = logA - betaT*logE
 
             logA_grad = []
             for i in range(self.z_dim):
@@ -117,9 +118,9 @@ class prior_model(nn.Module):
             for i in range(self.z_dim):
                 logE_i = logE[:,i]
                 logE_grad += [torch.autograd.grad(logE_i.sum(),z0,retain_graph=True)[0][:,i]]
-            E_grad = torch.stack(logE_grad, dim=-1) * E
+            logE_grad = torch.stack(logE_grad, dim=-1)
 
-            M_grad = D_factor*A_grad - betaT * M * E_grad
+            M_grad = D_factor*A_grad - betaT * M * logE_grad
 
             prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force+ M_grad/betaT, 2)/M, dim=1)
         
@@ -147,10 +148,10 @@ class prior_model(nn.Module):
             logE = self.prior_logE(z0)        
 
             E = torch.exp(logE)
-            D_factor = torch.exp(-betaT*E)
+            D_factor = torch.pow(E,-betaT)#torch.exp(-betaT*E)
             A = torch.exp(logA)
             M = A*D_factor
-            logM = logA - betaT*E
+            logM = logA - betaT*logE
 
             logA_grad = []
             for i in range(self.z_dim):
@@ -162,9 +163,9 @@ class prior_model(nn.Module):
             for i in range(self.z_dim):
                 logE_i = logE[:,i]
                 logE_grad += [torch.autograd.grad(logE_i.sum(),z0,retain_graph=True)[0][:,i]]
-            E_grad = torch.stack(logE_grad, dim=-1) * E
+            logE_grad = torch.stack(logE_grad, dim=-1)
 
-            M_grad = D_factor*A_grad - betaT * M * E_grad    
+            M_grad = D_factor*A_grad - betaT * M * logE_grad    
 
             z1 = z0 + self.reparameterize(M*force+ M_grad/betaT, logM-np.log(betaT/2))
         
@@ -320,6 +321,7 @@ class prior_model(nn.Module):
 #            elif len(train_cluster_indices[k]) > batch_size:
 #                size = train_cluster_indices[k].shape[0] // batch_size * batch_size
             else:
+                print((train_dataset_size) // train_cluster_indices[k].shape[0], train_dataset_size, train_cluster_indices[k].shape[0])
                 for i in range((train_dataset_size) // train_cluster_indices[k].shape[0]):
                     train_dataset_indices += [
                         train_cluster_indices[k][
