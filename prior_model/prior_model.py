@@ -187,7 +187,7 @@ class prior_model(nn.Module):
 
 
     @torch.no_grad()
-    def get_cluster_centers(self, train_input_data, test_input_data, infer_input_data, batch_size=128, save_centers=False, log_path=None):
+    def get_cluster_centers(self, train_input_data, test_input_data, infer_input_data, save_centers=False, log_path=None, batch_size=128):
         # This function generates the cluster centers from regular space clustering
 
         if log_path!=None:
@@ -266,7 +266,7 @@ class prior_model(nn.Module):
         '''
 
         # discretize the latent space into bins using regular clustering
-        output_variables = self.get_cluster_centers(train_past_data0, test_past_data0, infer_past_data0, save_centers, log_path)
+        output_variables = self.get_cluster_centers(train_past_data0, test_past_data0, infer_past_data0, save_centers=save_centers, log_path=log_path)
 
         train_cluster_labels, test_cluster_labels, infer_cluster_labels = output_variables[0], output_variables[1], output_variables[2]
 
