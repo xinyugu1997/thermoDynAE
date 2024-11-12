@@ -68,7 +68,7 @@ class prior_model(nn.Module):
             nn.Tanh(),
             nn.Linear(neuron_num, neuron_num),
             nn.Tanh(),
-            nn.Linear(neuron_num, z_dim)
+            nn.Linear(neuron_num, z_dim),
             nn.ReLU())
         
         self.force_net = nn.Sequential(
@@ -321,7 +321,7 @@ class prior_model(nn.Module):
 #            elif len(train_cluster_indices[k]) > batch_size:
 #                size = train_cluster_indices[k].shape[0] // batch_size * batch_size
             else:
-                print((train_dataset_size) // train_cluster_indices[k].shape[0], train_dataset_size, train_cluster_indices[k].shape[0])
+#                print((train_dataset_size) // train_cluster_indices[k].shape[0], train_dataset_size, train_cluster_indices[k].shape[0])
                 for i in range((train_dataset_size) // train_cluster_indices[k].shape[0]):
                     train_dataset_indices += [
                         train_cluster_indices[k][
