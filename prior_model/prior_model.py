@@ -63,7 +63,7 @@ class prior_model(nn.Module):
             nn.Tanh(),
             nn.Linear(neuron_num, z_dim))
         
-        self.logE_net = nn.Sequential(
+        self.EA_net = nn.Sequential(
             nn.Linear(z_dim, neuron_num),
             nn.Tanh(),
             nn.Linear(neuron_num, neuron_num),
@@ -81,8 +81,8 @@ class prior_model(nn.Module):
     def prior_logA(self, z):
         return self.logA_net(z)
     
-    def prior_logE(self, z):
-        return self.logE_net(z)
+    def prior_EA(self, z):
+        return self.EA_net(z)
     
     def prior_force(self, z):
         return self.force_net(z)
@@ -100,13 +100,12 @@ class prior_model(nn.Module):
             
         else:
             logA = self.prior_logA(z0)
-            logE = self.prior_logE(z0)
+            EA = self.prior_EA(z0)
 
-            E = torch.exp(logE)
-            D_factor = torch.pow(E,-betaT)#torch.exp(-betaT*E)
+            D_factor = torch.exp(-betaT*EA)
             A = torch.exp(logA)
             M = A*D_factor
-            logM = logA - betaT*logE
+            logM = logA - betaT*EA
 
             logA_grad = []
             for i in range(self.z_dim):
@@ -114,13 +113,13 @@ class prior_model(nn.Module):
                 logA_grad += [torch.autograd.grad(logA_i.sum(),z0,retain_graph=True)[0][:,i]]
             A_grad = torch.stack(logA_grad, dim=-1) * A
 
-            logE_grad = []
+            EA_grad = []
             for i in range(self.z_dim):
-                logE_i = logE[:,i]
-                logE_grad += [torch.autograd.grad(logE_i.sum(),z0,retain_graph=True)[0][:,i]]
-            logE_grad = torch.stack(logE_grad, dim=-1)
+                EA_i = EA[:,i]
+                EA_grad += [torch.autograd.grad(EA_i.sum(),z0,retain_graph=True)[0][:,i]]
+            EA_grad = torch.stack(EA_grad, dim=-1)
 
-            M_grad = D_factor*A_grad - betaT * M * logE_grad
+            M_grad = D_factor*A_grad - betaT * M * EA_grad
 
             prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force+ M_grad/betaT, 2)/M, dim=1)
         
@@ -145,13 +144,12 @@ class prior_model(nn.Module):
             
         else:
             logA = self.prior_logA(z0)
-            logE = self.prior_logE(z0)        
+            EA = self.prior_EA(z0)        
 
-            E = torch.exp(logE)
-            D_factor = torch.pow(E,-betaT)#torch.exp(-betaT*E)
+            D_factor = torch.exp(-betaT*EA)
             A = torch.exp(logA)
             M = A*D_factor
-            logM = logA - betaT*logE
+            logM = logA - betaT*EA
 
             logA_grad = []
             for i in range(self.z_dim):
@@ -159,13 +157,13 @@ class prior_model(nn.Module):
                 logA_grad += [torch.autograd.grad(logA_i.sum(),z0,retain_graph=True)[0][:,i]]
             A_grad = torch.stack(logA_grad, dim=-1) * A
 
-            logE_grad = []
+            EA_grad = []
             for i in range(self.z_dim):
-                logE_i = logE[:,i]
-                logE_grad += [torch.autograd.grad(logE_i.sum(),z0,retain_graph=True)[0][:,i]]
-            logE_grad = torch.stack(logE_grad, dim=-1)
+                EA_i = EA[:,i]
+                EA_grad += [torch.autograd.grad(EA_i.sum(),z0,retain_graph=True)[0][:,i]]
+            EA_grad = torch.stack(EA_grad, dim=-1)
 
-            M_grad = D_factor*A_grad - betaT * M * logE_grad    
+            M_grad = D_factor*A_grad - betaT * M * EA_grad    
 
             z1 = z0 + self.reparameterize(M*force+ M_grad/betaT, logM-np.log(betaT/2))
         
