@@ -63,7 +63,7 @@ class prior_model(nn.Module):
             nn.Tanh(),
             nn.Linear(neuron_num, z_dim))
         
-        self.EA_net = nn.Sequential(
+        self.Ea_net = nn.Sequential(
             nn.Linear(z_dim, neuron_num),
             nn.Tanh(),
             nn.Linear(neuron_num, neuron_num),
@@ -82,7 +82,7 @@ class prior_model(nn.Module):
         return self.logA_net(z)
     
     def prior_EA(self, z):
-        return self.EA_net(z)
+        return self.Ea_net(z)
     
     def prior_force(self, z):
         return self.force_net(z)
