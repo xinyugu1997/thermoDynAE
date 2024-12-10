@@ -72,7 +72,7 @@ class prior_model(nn.Module):
             nn.ReLU())
         
         self.force_net = nn.Sequential(
-            nn.Linear(z_dim, neuron_num),
+            nn.Linear(z_dim*2, neuron_num),
             nn.Tanh(),
             nn.Linear(neuron_num, neuron_num),
             nn.Tanh(),
@@ -84,14 +84,14 @@ class prior_model(nn.Module):
     def prior_EA(self, z):
         return self.ea_net(z)
     
-    def prior_force(self, z):
-        return self.force_net(z)
+    def prior_force(self, zwt):
+        return self.force_net(zwt)
     
     def prior_loss(self, z0, z1, betaT):
         z0 = z0.detach()
         z0.requires_grad = True
-        
-        force = self.prior_force(z0)
+        z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)
+        force = self.prior_force(z0wt)
         
         if self.ConstantDiffusionPrior:
             logM = self.constant_logM
@@ -134,8 +134,8 @@ class prior_model(nn.Module):
         z0.requires_grad = True        
         if dt_infer != 1:
             raise NotImplementedError
-            
-        force = self.prior_force(z0)
+        z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)    
+        force = self.prior_force(z0wt)
         
         if self.ConstantDiffusionPrior:
             logM = self.constant_logM
@@ -173,7 +173,7 @@ class prior_model(nn.Module):
         traj = []
         z0 = z_init.clone()
         z0 = z0.view((-1,self.z_dim))
-        betaT = torch.full_like(z0, betaT_infer)
+        betaT = torch.full((len(z0),1), betaT_infer)
         for istep in range(infer_steps):
             if istep % 1000 == 0:
                 print('Step:', istep, 'Temp:', betaT_infer)
