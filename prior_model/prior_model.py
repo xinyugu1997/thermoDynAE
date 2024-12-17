@@ -44,13 +44,14 @@ def sample_mini_batch(data0, data1, dataT, indices, device):
 
 # architecture
 class prior_model(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, neuron_num=32, bias_factor=3):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, neuron_num=32, bias_factor=3):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
         self.neuron_num = neuron_num
         self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
+	self.reduced_force = reduced_force
         
         if ConstantDiffusionPrior:
             print("Constant Diffusion!!")
@@ -90,7 +91,10 @@ class prior_model(nn.Module):
     def prior_loss(self, z0, z1, betaT):
         z0 = z0.detach()
         z0.requires_grad = True
-        z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)
+	if self.reduced_force:
+        	z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)
+	else:
+		z0wt = torch.cat((z0, torch.zeros_like(z0)), dim=1)
         force = self.prior_force(z0wt)
         
         if self.ConstantDiffusionPrior:
@@ -134,7 +138,11 @@ class prior_model(nn.Module):
         z0.requires_grad = True        
         if dt_infer != 1:
             raise NotImplementedError
-        z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)    
+	if self.reduced_force:
+		z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)
+	else:
+		z0wt = torch.cat((z0, torch.zeros_like(z0)), dim=1)
+ 
         force = self.prior_force(z0wt)
         
         if self.ConstantDiffusionPrior:
