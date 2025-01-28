@@ -51,7 +51,7 @@ class prior_model(nn.Module):
         self.neuron_num = neuron_num
         self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
-	self.reduced_force = reduced_force
+        self.reduced_force = reduced_force
         
         if ConstantDiffusionPrior:
             print("Constant Diffusion!!")
@@ -73,7 +73,7 @@ class prior_model(nn.Module):
             nn.ReLU())
         
         self.force_net = nn.Sequential(
-            nn.Linear(z_dim*2, neuron_num),
+            nn.Linear(z_dim+1, neuron_num),
             nn.Tanh(),
             nn.Linear(neuron_num, neuron_num),
             nn.Tanh(),
@@ -91,10 +91,10 @@ class prior_model(nn.Module):
     def prior_loss(self, z0, z1, betaT):
         z0 = z0.detach()
         z0.requires_grad = True
-	if self.reduced_force:
-        	z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)
-	else:
-		z0wt = torch.cat((z0, torch.zeros_like(z0)), dim=1)
+        if self.reduced_force:
+            z0wt = torch.cat((z0, betaT), dim=1)
+        else:
+            z0wt = torch.cat((z0, torch.zeros_like(betaT)), dim=1)
         force = self.prior_force(z0wt)
         
         if self.ConstantDiffusionPrior:
@@ -138,10 +138,10 @@ class prior_model(nn.Module):
         z0.requires_grad = True        
         if dt_infer != 1:
             raise NotImplementedError
-	if self.reduced_force:
-		z0wt = torch.cat((z0, betaT.expand(-1, self.z_dim)), dim=1)
-	else:
-		z0wt = torch.cat((z0, torch.zeros_like(z0)), dim=1)
+        if self.reduced_force:
+            z0wt = torch.cat((z0, betaT), dim=1)
+        else:
+            z0wt = torch.cat((z0, torch.zeros_like(betaT)), dim=1)
  
         force = self.prior_force(z0wt)
         
