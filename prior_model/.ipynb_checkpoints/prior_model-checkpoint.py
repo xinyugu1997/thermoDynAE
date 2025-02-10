@@ -136,6 +136,8 @@ class prior_model(nn.Module):
     def Langevin_Forward(self, z0, betaT, dt_infer):
         z0 = z0.detach()
         z0.requires_grad = True        
+        if dt_infer != 1:
+            raise NotImplementedError
         if self.reduced_force:
             z0wt = torch.cat((z0, betaT), dim=1)
         else:
@@ -146,7 +148,7 @@ class prior_model(nn.Module):
         if self.ConstantDiffusionPrior:
             logM = self.constant_logM
             M = torch.exp(logM) 
-            z1 = z0 + self.reparameterize(M*force*dt_infer, logM-np.log(betaT/2/dt_infer))
+            z1 = z0 + self.reparameterize(M*force, logM-np.log(betaT/2))
             
         else:
             logA = self.prior_logA(z0)
@@ -171,7 +173,7 @@ class prior_model(nn.Module):
 
             M_grad = D_factor*A_grad - betaT * M * EA_grad    
 
-            z1 = z0 + self.reparameterize(M*force*dt_infer + M_grad*dt_infer/betaT, logM-np.log(betaT/2/dt_infer))
+            z1 = z0 + self.reparameterize(M*force+ M_grad/betaT, logM-np.log(betaT/2))
         
         return z1
 
