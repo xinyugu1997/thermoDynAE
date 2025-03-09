@@ -44,7 +44,7 @@ def sample_mini_batch(data0, data1, dataT, indices, device):
 
 # architecture
 class prior_model(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, neuron_num=32, bias_factor=3):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, reduced_force_T_noise=0, neuron_num=32, bias_factor=3):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
@@ -52,6 +52,7 @@ class prior_model(nn.Module):
         self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
         self.reduced_force = reduced_force
+        self.reduced_force_T_noise = reduced_force_T_noise
         
         if ConstantDiffusionPrior:
             print("Constant Diffusion!!")
@@ -92,7 +93,8 @@ class prior_model(nn.Module):
         z0 = z0.detach()
         z0.requires_grad = True
         if self.reduced_force:
-            z0wt = torch.cat((z0, betaT), dim=1)
+            betaT_white_noise = betaT+self.reduced_force_T_noise*torch.randn_like(betaT)
+            z0wt = torch.cat((z0, betaT_white_noise), dim=1)
         else:
             z0wt = torch.cat((z0, torch.zeros_like(betaT)), dim=1)
         force = self.prior_force(z0wt)
