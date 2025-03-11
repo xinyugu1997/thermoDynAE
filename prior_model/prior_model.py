@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 import numpy as np
 import os
 import time
@@ -42,9 +43,30 @@ def sample_mini_batch(data0, data1, dataT, indices, device):
     return mini_data0, mini_data1, mini_dataT
 
 
+
+class GaussianFourierProjection(nn.Module):
+  """Gaussian random features for encoding time steps."""  
+  def __init__(self, embed_dim, scale=30.):
+    super().__init__()
+    # Randomly sample weights during initialization. These weights are fixed 
+    # during optimization and are not trainable.
+    self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+  def forward(self, x):
+    x_proj = x * self.W[None, :] * 2 * np.pi
+    return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+class Dense(nn.Module):
+  """A fully connected layer that reshapes outputs to feature maps."""
+  def __init__(self, input_dim, output_dim):
+    super().__init__()
+    self.dense = nn.Linear(input_dim, output_dim)
+  def forward(self, x):
+    return self.dense(x)#[..., None, None]
+
+
 # architecture
 class prior_model(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, reduced_force_T_noise=0, neuron_num=32, bias_factor=3):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, neuron_num=32, bias_factor=3):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
@@ -72,13 +94,17 @@ class prior_model(nn.Module):
             nn.Tanh(),
             nn.Linear(neuron_num, z_dim),
             nn.ReLU())
+
+        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+            nn.Linear(embed_dim, embed_dim))
+
+        self.act = lambda x: x * torch.sigmoid(x)
+        self.linear1 = nn.Linear(z_dim, neuron_num)
+        self.dense1 = Dense(embed_dim, neuron_num)
+        self.linear2 = nn.Linear(neuron_num, neuron_num)
+        self.dense2 = Dense(embed_dim, neuron_num)
+        self.linear3 = nn.Linear(neuron_num, z_dim)
         
-        self.force_net = nn.Sequential(
-            nn.Linear(z_dim+1, neuron_num),
-            nn.Tanh(),
-            nn.Linear(neuron_num, neuron_num),
-            nn.Tanh(),
-            nn.Linear(neuron_num, z_dim))
     
     def prior_logA(self, z):
         return self.logA_net(z)
@@ -86,18 +112,26 @@ class prior_model(nn.Module):
     def prior_EA(self, z):
         return self.ea_net(z)
     
-    def prior_force(self, zwt):
-        return self.force_net(zwt)
+    def prior_force(self, z, betaT):
+        embed = self.act(self.embed(betaT))    
+        h = self.linear1(z)    
+        ## Incorporate information from betaT
+        h += self.dense1(embed)
+        h = F.tanh(h)
+        h = self.linear2(h)
+        h += self.dense2(embed)
+        h = F.tanh(h)
+        h = self.linear3(h)
+        return h
     
     def prior_loss(self, z0, z1, betaT):
         z0 = z0.detach()
         z0.requires_grad = True
         if self.reduced_force:
-            betaT_white_noise = betaT+self.reduced_force_T_noise*torch.randn_like(betaT)
-            z0wt = torch.cat((z0, betaT_white_noise), dim=1)
+            embed_t = betaT+self.reduced_force_T_noise*torch.randn_like(betaT)
         else:
-            z0wt = torch.cat((z0, torch.zeros_like(betaT)), dim=1)
-        force = self.prior_force(z0wt)
+            embed_t = torch.zeros_like(betaT)
+        force = self.prior_force(z0, embed_t)
         
         if self.ConstantDiffusionPrior:
             logM = self.constant_logM
@@ -137,13 +171,12 @@ class prior_model(nn.Module):
     
     def Langevin_Forward(self, z0, betaT, dt_infer):
         z0 = z0.detach()
-        z0.requires_grad = True        
+        z0.requires_grad = True       
         if self.reduced_force:
-            z0wt = torch.cat((z0, betaT), dim=1)
+            embed_t = betaT    #+self.reduced_force_T_noise*torch.randn_like(betaT)
         else:
-            z0wt = torch.cat((z0, torch.zeros_like(betaT)), dim=1)
- 
-        force = self.prior_force(z0wt)
+            embed_t = torch.zeros_like(betaT)
+        force = self.prior_force(z0, embed_t)
         
         if self.ConstantDiffusionPrior:
             logM = self.constant_logM
