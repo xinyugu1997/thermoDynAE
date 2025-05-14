@@ -61,6 +61,16 @@ def sample_pairwise_minibatch(past_data0, past_data1, target_data0, target_data1
 
     return sample_past_data0, sample_past_data1, sample_target_data0, sample_target_data1
 
+def D_KL(dist1, dist2, epsilon=1e-12):
+    if len(dist1) != len(dist2):
+       raise ValueError('two distributions must share the same bins')
+    dist1 = dist1/np.sum(dist1)
+    dist2 = dist2/np.sum(dist2)
+    dist1 = np.clip(dist1, epsilon, 1)
+    dist2 = np.clip(dist2, epsilon, 1)
+    return np.sum(dist1*np.log(dist1/dist2))
+	
+
 def rand_projections(z_dim, num_samples=50):
     # This function generates `num_samples` random samples from the latent space's unit sphere
     projections = [w / np.sqrt((w**2).sum())

@@ -46,7 +46,7 @@ def sample_mini_batch(data0, data1, dataT, indices, device):
 
 class GaussianFourierProjection(nn.Module):
   """Gaussian random features for encoding time steps."""  
-  def __init__(self, embed_dim, scale=30.):
+  def __init__(self, embed_dim, scale=5.):
     super().__init__()
     # Randomly sample weights during initialization. These weights are fixed 
     # during optimization and are not trainable.
@@ -66,7 +66,7 @@ class Dense(nn.Module):
 
 # architecture
 class prior_model(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, neuron_num=32, bias_factor=3):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, embed_scale=5., neuron_num=32, bias_factor=3):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
@@ -95,7 +95,10 @@ class prior_model(nn.Module):
             nn.Linear(neuron_num, z_dim),
             nn.ReLU())
 
-        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+        if self.reduced_force:
+            print(f"reduced_force, temperature dependent!! T_noise during training:{reduced_force_T_noise}.")
+            print(f"temperature embed_dim:{embed_dim} embed_scale:{embed_scale}")
+        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim, scale=embed_scale),
             nn.Linear(embed_dim, embed_dim))
 
         self.act = lambda x: x * torch.sigmoid(x)
