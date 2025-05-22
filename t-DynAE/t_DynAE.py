@@ -215,7 +215,7 @@ class t_DynAE(nn.Module):
         test_all_z = torch.cat(test_all_z, dim=0)
 
         # dicretize the latent space into bins
-        cluster_centers = utils.RegSpaceClustering(train_all_z)
+        cluster_centers = utils.RegSpaceClustering(train_all_z, min_centers=self.min_centers)
 	
 
         # obtain the cluster labels
@@ -224,9 +224,6 @@ class t_DynAE(nn.Module):
 
         test_distance_matrix = torch.sqrt((torch.square(test_all_z.unsqueeze(1) - cluster_centers.unsqueeze(0))).sum(dim=-1))
         test_cluster_labels = torch.argmin(test_distance_matrix, dim=1)
-
-        infer_distance_matrix = torch.sqrt((torch.square(infer_all_z.unsqueeze(1) - cluster_centers.unsqueeze(0))).sum(dim=-1))
-        infer_cluster_labels = torch.argmin(infer_distance_matrix, dim=1)
 
 
         if log_path!=None:
@@ -238,10 +235,10 @@ class t_DynAE(nn.Module):
             print('%i cluster centers detected' % len(cluster_centers) + '\n', file=open(log_path, 'a'))
 
         if save_centers:
-            return train_cluster_labels, test_cluster_labels, infer_cluster_labels, cluster_centers
+            return train_cluster_labels, test_cluster_labels, cluster_centers
 
         else:
-            return train_cluster_labels, test_cluster_labels, infer_cluster_labels
+            return train_cluster_labels, test_cluster_labels 
 
     def resampling(self, train_past_data0, test_past_data0, infer_past_data0, save_centers, output_path, log_path, index=0, batch_size=32):
         '''
