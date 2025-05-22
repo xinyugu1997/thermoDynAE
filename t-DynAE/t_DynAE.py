@@ -240,7 +240,8 @@ class t_DynAE(nn.Module):
         else:
             return train_cluster_labels, test_cluster_labels 
 
-    def resampling(self, train_past_data0, test_past_data0, infer_past_data0, save_centers, output_path, log_path, index=0, batch_size=32):
+
+    def resampling(self, train_past_data0, test_past_data0, save_centers, output_path, log_path, index=0, batch_size=32):
         '''
         Uniformly discretizing the latent space and resampling the dataset based on a well-tempered distribution.
             Args:
@@ -257,9 +258,9 @@ class t_DynAE(nn.Module):
         '''
 
         # discretize the latent space into bins using regular clustering
-        output_variables = self.get_cluster_centers(train_past_data0, test_past_data0, infer_past_data0, save_centers=save_centers, log_path=log_path)
+        output_variables = self.get_cluster_centers(train_past_data0, test_past_data0, save_centers=save_centers, log_path=log_path)
 
-        train_cluster_labels, test_cluster_labels, infer_cluster_labels = output_variables[0], output_variables[1], output_variables[2]
+        train_cluster_labels, test_cluster_labels = output_variables[0], output_variables[1]
 
         # output z cluster centers
         if save_centers:
@@ -274,14 +275,12 @@ class t_DynAE(nn.Module):
         total_weights = 0
         train_cluster_indices = []
         test_cluster_indices = []
-        infer_cluster_indices = []
 
         total_effective_samples = 0
 
         for k in range(num_cluster):
             train_cluster_indices += [torch.nonzero(train_cluster_labels == k, as_tuple=True)[0]]
             test_cluster_indices += [torch.nonzero(test_cluster_labels == k, as_tuple=True)[0]]
-            infer_cluster_indices += [torch.nonzero(infer_cluster_labels == k, as_tuple=True)[0]]
 
             if len(train_cluster_indices[k]) > batch_size:
                 total_effective_samples += len(train_cluster_indices[k])
@@ -298,12 +297,10 @@ class t_DynAE(nn.Module):
         # create better dataset by resampling from each bin
         train_dataset_indices = []
         test_dataset_indices = []
-        infer_dataset_indices = []
 
         for k in range(num_cluster):
             train_dataset_size = int(train_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
             test_dataset_size = int(test_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
-            infer_dataset_size = int(infer_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
 
             if len(train_cluster_indices[k]) > train_dataset_size:
                 train_dataset_indices += [train_cluster_indices[k][
@@ -329,33 +326,18 @@ class t_DynAE(nn.Module):
                     test_dataset_indices += [
                         test_cluster_indices[k][torch.randperm(len(test_cluster_indices[k]))]]#[:size]]]
 
-
-            if len(infer_cluster_indices[k]) > infer_dataset_size:
-                infer_dataset_indices += [infer_cluster_indices[k][
-                                             torch.randperm(len(infer_cluster_indices[k]))[
-                                             :infer_dataset_size]]]
-            elif infer_cluster_indices[k].shape[0] > 0:
-                for i in range(infer_dataset_size // infer_cluster_indices[k].shape[0]):
-                    infer_dataset_indices += [
-                        infer_cluster_indices[k][torch.randperm(len(infer_cluster_indices[k]))]]
-
-
         train_dataset_indices = torch.cat(train_dataset_indices, dim=0)#.reshape((-1, batch_size))
         test_dataset_indices = torch.cat(test_dataset_indices, dim=0)#.reshape((-1, batch_size))
-        infer_dataset_indices = torch.cat(infer_dataset_indices, dim=0)
 
         train_indices = train_dataset_indices[
             torch.randperm((train_dataset_indices).shape[0])].flatten()
         test_indices = test_dataset_indices[
             torch.randperm((test_dataset_indices).shape[0])].flatten()
-        infer_indices = infer_dataset_indices[
-            torch.randperm((infer_dataset_indices).shape[0])].flatten()
 
-        return train_indices, test_indices, infer_indices
+        return train_indices, test_indices
  
     
-    def train_model(self, train_set0, test_set0, train_set1, test_set1, train_setT, test_setT, 
-                    infer_set0, infer_set1, infer_setT, prior_learning_rate, batch_size, max_epochs, 
+    def train_model(self, train_set0, test_set0, train_set1, test_set1, train_setT, test_setT, prior_learning_rate, batch_size, max_epochs, 
                     output_path, log_interval, SaveTrainingProgress, lr_scheduler_step_size, lr_scheduler_gamma, beta_MSE):
         self.train()
 
@@ -374,16 +356,14 @@ class t_DynAE(nn.Module):
         prior_scheduler = torch.optim.lr_scheduler.StepLR(prior_optimizer, step_size=lr_scheduler_step_size,
                                                     gamma=lr_scheduler_gamma)
         
-        train_resample, test_resample, infer_resample = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path=output_path, log_path=log_path) 
+        train_resample, test_resample = self.resampling(train_set0, test_set0, save_centers=False, output_path=output_path, log_path=log_path) 
         while epoch < max_epochs:
             if epoch == 0:
                 train_permutation = torch.randperm(train_set0.shape[0])
                 test_permutation = torch.randperm(test_set0.shape[0])
-                infer_permutation = torch.randperm(infer_set0.shape[0])
             else:
                 train_permutation = train_resample[torch.randperm((train_resample).shape[0])] 
                 test_permutation = test_resample[torch.randperm((test_resample).shape[0])]
-                infer_permutation = infer_resample[torch.randperm((infer_resample).shape[0])]
 
 
             for i in range(0, len(train_permutation), batch_size):
