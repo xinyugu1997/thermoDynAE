@@ -9,66 +9,49 @@ import utils
 import architectures
 
 class t_DynAE(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, embed_scale=5., neuron_num=32, bias_factor=3):
+    def __init__(self, z_dim, output_shape, data_shape, device, neuron_num1=16, neuron_num2=16, projection_num=50, 
+                 ConstantDiffusionPrior=True, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, embed_scale=10.0., 
+                 neuron_num=32, bias_factor=3, min_centers=200):
         super().__init__()
         self.z_dim = z_dim
+        self.output_shape = output_shape
+        self.data_shape = data_shape
         self.device = device
+        self.projection_num = projection_num
+        self.embed_dim = embed_dim
+        self.embed_scale = embed_scale
+        self.min_centers = min_centers
         self.neuron_num = neuron_num
+        self.neuron_num1 = neuron_num1
+        self.neuron_num2 = neuron_num2
         self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
         self.reduced_force = reduced_force
         self.reduced_force_T_noise = reduced_force_T_noise
         
-        if ConstantDiffusionPrior:
-            print("Constant Diffusion!!")
-            self.constant_logM = nn.Parameter(torch.randn(1, z_dim))
-        
-        self.logA_net = nn.Sequential(
-            nn.Linear(z_dim, neuron_num),
-            nn.Tanh(),
-            nn.Linear(neuron_num, neuron_num),
-            nn.Tanh(),
-            nn.Linear(neuron_num, z_dim))
-        
-        self.ea_net = nn.Sequential(
-            nn.Linear(z_dim, neuron_num),
-            nn.Tanh(),
-            nn.Linear(neuron_num, neuron_num),
-            nn.Tanh(),
-            nn.Linear(neuron_num, z_dim),
-            nn.ReLU())
 
-        if self.reduced_force:
-            print(f"reduced_force, temperature dependent!! T_noise during training:{reduced_force_T_noise}.")
-            print(f"temperature embed_dim:{embed_dim} embed_scale:{embed_scale}")
-        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim, scale=embed_scale),
-            nn.Linear(embed_dim, embed_dim))
+        self.model_encoder = architectures.fc_encoder(z_dim, data_shape, neuron_num1)
+        self.model_decoder = architectures.fc_decoder(z_dim, output_shape, neuron_num2)
+        self.model_prior = architectures.Langevin_prior(z_dim, device, ConstantDiffusionPrior, reduced_force, reduced_force_T_noise, embed_dim, embed_scale, neuron_num)
 
-        self.act = lambda x: x * torch.sigmoid(x)
-        self.linear1 = nn.Linear(z_dim, neuron_num)
-        self.dense1 = Dense(embed_dim, neuron_num)
-        self.linear2 = nn.Linear(neuron_num, neuron_num)
-        self.dense2 = Dense(embed_dim, neuron_num)
-        self.linear3 = nn.Linear(neuron_num, z_dim)
-        
-    
-    def prior_logA(self, z):
-        return self.logA_net(z)
-    
-    def prior_EA(self, z):
-        return self.ea_net(z)
-    
-    def prior_force(self, z, betaT):
-        embed = self.act(self.embed(betaT))    
-        h = self.linear1(z)    
-        ## Incorporate information from betaT
-        h += self.dense1(embed)
-        h = F.tanh(h)
-        h = self.linear2(h)
-        h += self.dense2(embed)
-        h = F.tanh(h)
-        h = self.linear3(h)
-        return h
+
+    def encode(self, inputs):
+        h = self.model_encoder.encoder_input_layer(inputs)
+        enc = self.model_encoder.encoder(h)
+        z = self.model_encoder.encoder_output_layer(enc)
+        return z
+
+    def decode(self, z):
+        h = self.model_decoder.decoder_input_layer(z)
+        dec = self.model_decoder.decoder(h)
+        outputs = self.model_decoder.decoder_output_layer(dec)
+        return outputs
+
+    def forward(self, data):
+        z = self.encode(data)
+        outputs = self.decode(z)
+        return outputs, z
+
     
     def prior_loss(self, z0, z1, betaT):
         z0 = z0.detach()
@@ -77,16 +60,16 @@ class t_DynAE(nn.Module):
             embed_t = betaT+self.reduced_force_T_noise*torch.randn_like(betaT)
         else:
             embed_t = torch.zeros_like(betaT)
-        force = self.prior_force(z0, embed_t)
+        force = self.model_prior.prior_force(z0, embed_t)
         
         if self.ConstantDiffusionPrior:
-            logM = self.constant_logM
+            logM = self.model_prior.constant_logM
             M = torch.exp(logM)
             prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force, 2)/M, dim=1)        
             
         else:
-            logA = self.prior_logA(z0)
-            EA = self.prior_EA(z0)
+            logA = self.model_prior.prior_logA(z0)
+            EA = self.model_prior.prior_EA(z0)
 
             D_factor = torch.exp(-betaT*EA)
             A = torch.exp(logA)
@@ -109,7 +92,7 @@ class t_DynAE(nn.Module):
 
             prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force+ M_grad/betaT, 2)/M, dim=1)
         
-        return prior_loss
+        return prior_loss.mean()
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5*logvar)
@@ -122,16 +105,16 @@ class t_DynAE(nn.Module):
             embed_t = betaT    #+self.reduced_force_T_noise*torch.randn_like(betaT)
         else:
             embed_t = torch.zeros_like(betaT)
-        force = self.prior_force(z0, embed_t)
+        force = self.model_prior.prior_force(z0, embed_t)
         
         if self.ConstantDiffusionPrior:
-            logM = self.constant_logM
+            logM = self.model_prior.constant_logM
             M = torch.exp(logM) 
             z1 = z0 + self.reparameterize(M*force*dt_infer, logM-np.log(betaT/2/dt_infer))
             
         else:
-            logA = self.prior_logA(z0)
-            EA = self.prior_EA(z0)        
+            logA = self.model_prior.prior_logA(z0)
+            EA = self.model_prior.prior_EA(z0)        
 
             D_factor = torch.exp(-betaT*EA)
             A = torch.exp(logA)
@@ -162,7 +145,7 @@ class t_DynAE(nn.Module):
         z0 = z0.view((-1,self.z_dim))
         betaT = torch.full((len(z0),1), betaT_infer)
         for istep in range(infer_steps):
-            if istep % 1000 == 0:
+            if istep % 10000 == 0:
                 print('Step:', istep, 'Temp:', betaT_infer)
             z1 = self.Langevin_Forward(z0, betaT, dt_infer)
             z0 = z1.detach()
@@ -170,40 +153,66 @@ class t_DynAE(nn.Module):
             
         return traj       
 
+    def calculate_loss(self, betaT, input_data0, input_data1, target_data0, target_data1, 
+                       betaT_bins, beta=1.0):
+        batch_size = input_data0.size[0]
+        data = torch.cat([input_data0, input_data1], dim=0)
+        out, z = self.forward(data)
+         
+        output_data0 = out[:batch_size]
+        output_data1 = out[batch_size:]
+
+        z0 = z[:batch_size]
+        z1 = z[batch_size:]
+
+        encoded_samples = z1 - z0
+        prior_samples = self.Langevin_Forward(z0, betaT, dt_infer=1).detach() - z0.detach()
+
+        reconstruction_error = torch.sum( torch.pow((output_data0 - target_data0), 2), dim=1 ).mean() + \ 
+                               torch.sum( torch.pow((output_data1 - target_data1), 2), dim=1 ).mean()
+
+        sw_loss = utils.sliced_wasserstein_distance(encoded_samples, prior_samples, betaT, betaT_bins, 
+                                                    self.projection_num, device=self.device)
+
+        loss = reconstruction_error + beta * sw_loss
+
+        # detach the graph from encoder
+        z0_detached = z0.detach()
+        z1_detached = z1.detach()
+
+        prior_loss = self.prior_loss(z0_detached, z1_detached, betaT)
+
+
+        return loss, reconstruction_error.detach(), sw_loss.detach(), prior_loss 
 
     @torch.no_grad()
-    def get_cluster_centers(self, train_input_data, test_input_data, infer_input_data, save_centers=False, log_path=None, batch_size=128):
+    def get_cluster_centers(self, train_input_data, test_input_data, save_centers=False, log_path=None, batch_size=128):
         # This function generates the cluster centers from regular space clustering
 
         if log_path!=None:
             start_time = time.time()
 
-#        # obtain the latent representation
-#        train_all_z = []
-#        for i in range(0, len(train_input_data), batch_size):
-#            batch_inputs = train_input_data[i:i + batch_size].to(self.device)
-#
-#            # pass through VAE
-#            z = self.encode(batch_inputs)
-#
-#            train_all_z += [z.cpu()]
-#
-#        train_all_z = torch.cat(train_all_z, dim=0)
-#
-#        test_all_z = []
-#        for i in range(0, len(test_input_data), batch_size):
-#            batch_inputs = test_input_data[i:i + batch_size].to(self.device)
-#
-#            # pass through VAE
-#            z = self.encode(batch_inputs)
-#            test_all_z += [z.cpu()]
-#
-#        test_all_z = torch.cat(test_all_z, dim=0)
-#
-	# for training latent prior model only
-        train_all_z = train_input_data
-        test_all_z = test_input_data
-        infer_all_z = infer_input_data
+        # obtain the latent representation
+        train_all_z = []
+        for i in range(0, len(train_input_data), batch_size):
+            batch_inputs = train_input_data[i:i + batch_size].to(self.device)
+
+            # pass through VAE
+            z = self.encode(batch_inputs)
+
+            train_all_z += [z.cpu()]
+
+        train_all_z = torch.cat(train_all_z, dim=0)
+
+        test_all_z = []
+        for i in range(0, len(test_input_data), batch_size):
+            batch_inputs = test_input_data[i:i + batch_size].to(self.device)
+
+            # pass through VAE
+            z = self.encode(batch_inputs)
+            test_all_z += [z.cpu()]
+
+        test_all_z = torch.cat(test_all_z, dim=0)
 
         # dicretize the latent space into bins
         cluster_centers = utils.RegSpaceClustering(train_all_z)

@@ -66,12 +66,12 @@ class Dense(nn.Module):
         return self.dense(x)
 
 class Langevin_prior(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=True, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, embed_scale=10., neuron_num=32, bias_factor=3):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=True, reduced_force=True, 
+                 reduced_force_T_noise=0, embed_dim=64, embed_scale=10., neuron_num=32):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
         self.neuron_num = neuron_num
-        self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
         self.reduced_force = reduced_force
         self.reduced_force_T_noise = reduced_force_T_noise
