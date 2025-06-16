@@ -386,7 +386,7 @@ class t_DynAE(nn.Module):
                 temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1, 
 							train_target0, train_target1, train_indices, self.device)
 
-                loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1, 
+                loss, reconstruction_error, sw_loss, prior_loss = self.calculate_loss(temp, input0, input1, 
 							target0, target1, betaT_bins=betaT_bins, beta=beta_current)
                 
                 if (torch.isnan(loss).any()):
@@ -408,7 +408,7 @@ class t_DynAE(nn.Module):
                 prior_optimizer.step()
 
                 
-                if step % 50 == 0:  #output log every 50 steps
+                if step % 100 == 0:  #output log every 100 steps
                     train_time = time.time() - start
                     
                     print(f"Iteration {step}:\tTime {train_time} s\n loss (train) {loss}\t \
