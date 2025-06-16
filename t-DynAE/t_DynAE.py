@@ -53,8 +53,9 @@ class t_DynAE(nn.Module):
         return outputs, z
 
     
-    def prior_loss(self, z0, z1, betaT):
+    def prior_loss(self, z0, z1, betaT, beta_MSE=0):
         z0 = z0.detach()
+        z1 = z1.detach()
         z0.requires_grad = True
         if self.reduced_force:
             embed_t = betaT+self.reduced_force_T_noise*torch.randn_like(betaT)
@@ -91,8 +92,16 @@ class t_DynAE(nn.Module):
             M_grad = D_factor*A_grad - betaT * M * EA_grad
 
             prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force+ M_grad/betaT, 2)/M, dim=1)
-        
-        return prior_loss.mean()
+
+        #MSE reconstruction loss
+        if beta_MSE > 0:
+            z1_sampled = self.Langevin_Forward(z0, betaT, dt_infer=1)
+            MSE_loss = torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1)
+            return prior_loss.mean() + beta_MSE * MSE_loss.mean()
+        else:
+            return prior_loss.mean()
+
+
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5*logvar)
@@ -241,7 +250,7 @@ class t_DynAE(nn.Module):
             return train_cluster_labels, test_cluster_labels 
 
 
-    def resampling(self, train_past_data0, test_past_data0, save_centers, output_path, log_path, index=0, batch_size=32):
+    def resampling(self, train_past_data0, test_past_data0, save_centers, output_path, log_path, index=0, batch_size=128):
         '''
         Uniformly discretizing the latent space and resampling the dataset based on a well-tempered distribution.
             Args:
@@ -264,7 +273,7 @@ class t_DynAE(nn.Module):
 
         # output z cluster centers
         if save_centers:
-            cluster_centers = output_variables[3]
+            cluster_centers = output_variables[2]
             z_cluster_center_path = output_path + '_z_cluster_centers' + str(index) + '.npy'
             np.save(z_cluster_center_path, cluster_centers.cpu().data.numpy())
 
@@ -291,7 +300,7 @@ class t_DynAE(nn.Module):
 
         if total_effective_samples < train_past_data0.shape[0]*0.8:
             print(1.0*total_effective_samples/train_past_data0.shape[0])
-            print("Too few samples in each bin! Please increase dmin!")
+            print("Too few samples in each bin! Please decrease min_centers!")
             raise ValueError
 
         # create better dataset by resampling from each bin
@@ -302,32 +311,25 @@ class t_DynAE(nn.Module):
             train_dataset_size = int(train_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
             test_dataset_size = int(test_past_data0.shape[0] * cluster_weights[k] / total_weights / batch_size + 1) * batch_size
 
-            if len(train_cluster_indices[k]) > train_dataset_size:
+            if len(train_cluster_indices[k]) >= train_dataset_size:
                 train_dataset_indices += [train_cluster_indices[k][
                                               torch.randperm(len(train_cluster_indices[k]))[
                                               :train_dataset_size]]]
-#            elif len(train_cluster_indices[k]) > batch_size:
-#                size = train_cluster_indices[k].shape[0] // batch_size * batch_size
             else:
-#                print((train_dataset_size) // train_cluster_indices[k].shape[0], train_dataset_size, train_cluster_indices[k].shape[0])
-                for i in range((train_dataset_size) // train_cluster_indices[k].shape[0]):
-                    train_dataset_indices += [
-                        train_cluster_indices[k][
-                            torch.randperm(len(train_cluster_indices[k]))]]#[:size]]]
+                train_dataset_indices += [train_cluster_indices[k][
+                                              torch.randint(0, len(train_cluster_indices[k]), (train_dataset_size,))]]
 
-            if len(test_cluster_indices[k]) > test_dataset_size:
+            if len(test_cluster_indices[k]) >= test_dataset_size:
                 test_dataset_indices += [test_cluster_indices[k][
                                              torch.randperm(len(test_cluster_indices[k]))[
                                              :test_dataset_size]]]
-#            elif len(test_cluster_indices[k]) > batch_size:
-#                size = test_cluster_indices[k].shape[0] // batch_size * batch_size
             elif test_cluster_indices[k].shape[0] > 0:
-                for i in range(test_dataset_size // test_cluster_indices[k].shape[0]):
-                    test_dataset_indices += [
-                        test_cluster_indices[k][torch.randperm(len(test_cluster_indices[k]))]]#[:size]]]
+                test_dataset_indices += [test_cluster_indices[k][
+                                             torch.randint(0, len(test_cluster_indices[k]), (test_dataset_size,))]]
 
-        train_dataset_indices = torch.cat(train_dataset_indices, dim=0)#.reshape((-1, batch_size))
-        test_dataset_indices = torch.cat(test_dataset_indices, dim=0)#.reshape((-1, batch_size))
+
+        train_dataset_indices = torch.cat(train_dataset_indices, dim=0).reshape((-1, batch_size))
+        test_dataset_indices = torch.cat(test_dataset_indices, dim=0).reshape((-1, batch_size))
 
         train_indices = train_dataset_indices[
             torch.randperm((train_dataset_indices).shape[0])].flatten()
@@ -337,34 +339,42 @@ class t_DynAE(nn.Module):
         return train_indices, test_indices
  
     
-    def train_model(self, train_set0, test_set0, train_set1, test_set1, train_setT, test_setT, prior_learning_rate, batch_size, max_epochs, 
-                    output_path, log_interval, SaveTrainingProgress, lr_scheduler_step_size, lr_scheduler_gamma, beta_MSE):
+    def train_model(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
+			test_input0, test_input1, test_target0, test_target1, test_setT, 
+			beta, lr, lr_scheduler_step_size, lr_scheduler_gamma, prior_learning_rate, batch_size, max_epochs, 
+			output_path, log_interval, SaveTrainingProgress, beta_MSE=0):
         self.train()
 
         step = 0        # steps of model updates
         start = time.time()
         os.makedirs(output_path,exist_ok=True)
         log_path = output_path + '/log.txt'
-        model_path = output_path + '/prior_model'
+        model_path = output_path + '/tDynAE_model'
         os.makedirs(model_path,exist_ok=True)
 
         epoch = 0        # cycles of training data set 
 
-        #setup optimizer
-        prior_optimizer = torch.optim.Adam(self.parameters(),lr=prior_learning_rate,)
+        # setup optimizer
+        # small learning rate and beta for the first epoch
+        beta_current = beta/100
+        optimizer = torch.optim.Adam(chain(self.model_encoder.parameters(), self.model_decoder.parameters()), lr=1e-4)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
+
+        prior_optimizer = torch.optim.Adam(self.model_prior.parameters(),lr=prior_learning_rate,)        
         
-        prior_scheduler = torch.optim.lr_scheduler.StepLR(prior_optimizer, step_size=lr_scheduler_step_size,
-                                                    gamma=lr_scheduler_gamma)
-        
-        train_resample, test_resample = self.resampling(train_set0, test_set0, save_centers=False, output_path=output_path, log_path=log_path) 
         while epoch < max_epochs:
             if epoch == 0:
-                train_permutation = torch.randperm(train_set0.shape[0])
-                test_permutation = torch.randperm(test_set0.shape[0])
-            else:
-                train_permutation = train_resample[torch.randperm((train_resample).shape[0])] 
-                test_permutation = test_resample[torch.randperm((test_resample).shape[0])]
+                train_permutation = torch.randperm(train_input0.shape[0])
+                test_permutation = torch.randperm(test_input0.shape[0])
 
+            elif epoch == 1:
+                beta_current = beta
+                optimizer = torch.optim.Adam(chain(self.model_encoder.parameters(), self.model_decoder.parameters()), lr=lr)
+                scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
+                train_permutation, test_permutation = self.resampling(train_input0, test_input0, save_centers=False, output_path=output_path, log_path=log_path)
+
+            else:
+                train_permutation, test_permutation = self.resampling(train_input0, test_input0, save_centers=False, output_path=output_path, log_path=log_path)
 
             for i in range(0, len(train_permutation), batch_size):
                 step += 1
@@ -373,13 +383,8 @@ class t_DynAE(nn.Module):
                     break
                 
                 train_indices = train_permutation[i:(i+batch_size)]
-                z0, z1, temp = sample_mini_batch(train_set0, train_set1, train_setT, train_indices, self.device)  # call function from utils
-                train_loss = self.prior_loss(z0, z1, temp).mean()
-                
-                #MSE reconstruction loss
-                if beta_MSE > 0:
-                    z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                    train_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()                
+                input0, input1, temp = utils.sample_mini_batch(train_input0, train_input1, train_setT, train_indices, self.device)  
+                train_loss = self.prior_loss(z0, z1, temp)
                 
                 if (torch.isnan(train_loss).any()):
                     print("NAN in training loss")
@@ -402,30 +407,11 @@ class t_DynAE(nn.Module):
                         j = len(test_permutation) - batch_size
                         
                     test_indices = test_permutation[j:(j+batch_size)]
-                    z0, z1, temp = sample_mini_batch(test_set0, test_set1, test_setT, test_indices, self.device)  # call function from utils
-                    test_loss = self.prior_loss(z0, z1, temp).mean()
-                    # MSE loss
-                    if beta_MSE > 0:
-                        z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                        test_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
+                    z0, z1, temp = sample_mini_batch(test_input0, test_input1, test_setT, test_indices, self.device)  # call function from utils
+                    test_loss = self.prior_loss(z0, z1, temp)
                     
                     print(f"Prior loss (test) {test_loss}")
                     print(f"Prior loss (test) {test_loss}", file=open(log_path,'a'))
-                    
-                    k = i%len(infer_permutation)
-                    if (k+batch_size) > len(infer_permutation):
-                        k = len(infer_permutation) - batch_size
-                        
-                    infer_indices = infer_permutation[k:(k+batch_size)]
-                    z0, z1, temp = sample_mini_batch(infer_set0, infer_set1, infer_setT, infer_indices, self.device)  # call function from utils
-                    infer_loss = self.prior_loss(z0, z1, temp).mean()
-                    # MSE loss
-                    if beta_MSE > 0:
-                        z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                        infer_loss += beta_MSE*torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean()
-                    
-                    print(f"Prior loss (infer) {infer_loss}")
-                    print(f"Prior loss (infer) {infer_loss}", file=open(log_path,'a'))                   
                     
                 
             epoch += 1
@@ -456,10 +442,10 @@ class t_DynAE(nn.Module):
         
         return False
         
-    def output_result(self, train_set0, test_set0, train_set1, test_set1, train_setT, test_setT,
-                    infer_set0, infer_set1, infer_setT, beta_MSE, outputfile, batch_size=32):
+    def output_result(self, train_input0, test_input0, train_input1, test_input1, train_setT, test_setT,
+                     beta_MSE, outputfile, batch_size=32):
 
-        train_resample, test_resample, infer_resample = self.resampling(train_set0, test_set0, infer_set0, save_centers=False, output_path=None, log_path=outputfile)
+        train_resample, test_resample, infer_resample = self.resampling(train_input0, test_input0, infer_set0, save_centers=False, output_path=None, log_path=outputfile)
         train_permutation = train_resample[torch.randperm((train_resample).shape[0])]
         test_permutation = test_resample[torch.randperm((test_resample).shape[0])]
         infer_permutation = infer_resample[torch.randperm((infer_resample).shape[0])]
@@ -476,7 +462,7 @@ class t_DynAE(nn.Module):
                 break
 
             train_indices = train_permutation[i:(i+batch_size)]
-            z0, z1, temp = sample_mini_batch(train_set0, train_set1, train_setT, train_indices, self.device)  # call function from utils
+            z0, z1, temp = sample_mini_batch(train_input0, train_input1, train_setT, train_indices, self.device)  # call function from utils
             train_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
 
             #MSE reconstruction loss
@@ -492,7 +478,7 @@ class t_DynAE(nn.Module):
                 break
 
             test_indices = test_permutation[i:(i+batch_size)]
-            z0, z1, temp = sample_mini_batch(test_set0, test_set1, test_setT, test_indices, self.device)  # call function from utils
+            z0, z1, temp = sample_mini_batch(test_input0, test_input1, test_setT, test_indices, self.device)  # call function from utils
             test_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
 
             #MSE reconstruction loss
