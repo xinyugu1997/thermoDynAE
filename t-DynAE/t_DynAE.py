@@ -341,8 +341,8 @@ class t_DynAE(nn.Module):
     
     def train_model(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
 			test_input0, test_input1, test_target0, test_target1, test_setT, 
-			beta, lr, lr_scheduler_step_size, lr_scheduler_gamma, prior_learning_rate, batch_size, max_epochs, 
-			output_path, log_interval, SaveTrainingProgress, beta_MSE=0):
+			beta, lr, lr_scheduler_step_size, lr_scheduler_gamma, prior_learning_rate, 
+			batch_size, max_epochs, output_path, log_interval, SaveTrainingProgress):
         self.train()
 
         step = 0        # steps of model updates
@@ -371,10 +371,10 @@ class t_DynAE(nn.Module):
                 beta_current = beta
                 optimizer = torch.optim.Adam(chain(self.model_encoder.parameters(), self.model_decoder.parameters()), lr=lr)
                 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
-                train_permutation, test_permutation = self.resampling(train_input0, test_input0, save_centers=False, output_path=output_path, log_path=log_path)
+                train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
 
             else:
-                train_permutation, test_permutation = self.resampling(train_input0, test_input0, save_centers=False, output_path=output_path, log_path=log_path)
+                train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
 
             for i in range(0, len(train_permutation), batch_size):
                 step += 1
@@ -383,23 +383,38 @@ class t_DynAE(nn.Module):
                     break
                 
                 train_indices = train_permutation[i:(i+batch_size)]
-                input0, input1, temp = utils.sample_mini_batch(train_input0, train_input1, train_setT, train_indices, self.device)  
-                train_loss = self.prior_loss(z0, z1, temp)
+                temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1, 
+							train_target0, train_target1, train_indices, self.device)
+
+                loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1, 
+							target0, target1, betaT_bins=betaT_bins, beta=beta_current)
                 
-                if (torch.isnan(train_loss).any()):
+                if (torch.isnan(loss).any()):
                     print("NAN in training loss")
-                    print(train_loss)
+                    return True
+
+                optimizer.zero_grad()
+                prior_optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                if (torch.isnan(prior_loss).any()):
+                    print("NAN in priot loss")
                     return True
                 
+                optimizer.zero_grad()
                 prior_optimizer.zero_grad()
-                train_loss.backward()
+                prior_loss.backward()
                 prior_optimizer.step()
+
                 
-                if step % log_interval == 0:  #output log every 500 steps
+                if step % 50 == 0:  #output log every 50 steps
                     train_time = time.time() - start
                     
-                    print(f"Iteration {step}:\tTime {train_time} s\nPrior loss (train) {train_loss}")
-                    print(f"Iteration {step}:\tTime {train_time} s\nPrior loss (train) {train_loss}", 
+                    print(f"Iteration {step}:\tTime {train_time} s\n loss (train) {loss}\t \
+			 reconstruction_err {reconstruction_error}\t sw_loss {sw_loss}\t prior_loss {prior_loss}")
+                    print(f"Iteration {step}:\tTime {train_time} s\n loss (train) {loss}\t \
+			reconstruction_err {reconstruction_error}\t sw_loss {sw_loss}\t prior_loss {prior_loss}", 
                           file=open(log_path,'a'))
                     
                     j = i%len(test_permutation)
@@ -407,21 +422,28 @@ class t_DynAE(nn.Module):
                         j = len(test_permutation) - batch_size
                         
                     test_indices = test_permutation[j:(j+batch_size)]
-                    z0, z1, temp = sample_mini_batch(test_input0, test_input1, test_setT, test_indices, self.device)  # call function from utils
-                    test_loss = self.prior_loss(z0, z1, temp)
-                    
-                    print(f"Prior loss (test) {test_loss}")
-                    print(f"Prior loss (test) {test_loss}", file=open(log_path,'a'))
+                    temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(test_setT, test_input0, test_input1, 
+								test_target0, test_target1, test_indices, self.device)
+
+                    test_loss, test_reconstruction_error, test_sw_loss, test_prior_loss  = self.calculate_loss(temp, input0, input1, 
+								target0, target1, betaT_bins=betaT_bins, beta=beta_current)
+
+                    print(f" loss (test) {test_loss}\t reconstruction_err {test_reconstruction_error}\t \
+				sw_loss {test_sw_loss}\t prior_loss {test_prior_loss}")
+                    print(f" loss (test) {test_loss}\t reconstruction_err {test_reconstruction_error}\t \
+				sw_loss {test_sw_loss}\t prior_loss {test_prior_loss}",
+                          file=open(log_path,'a'))
+
                     
                 
             epoch += 1
-            prior_scheduler.step()
-            if prior_scheduler.gamma < 1:
-                print("Update lr to %f" % (prior_optimizer.param_groups[0]['lr']))
-                print("Update lr to %f" % (prior_optimizer.param_groups[0]['lr']), file=open(log_path, 'a'))
+            scheduler.step()
+            if scheduler.gamma < 1:
+                print("Update lr to %f" % (optimizer.param_groups[0]['lr']))
+                print("Update lr to %f" % (optimizer.param_groups[0]['lr']), file=open(log_path, 'a'))
             
             if SaveTrainingProgress:
-                if epoch % 10 == 0:
+                if epoch % log_interval == 0:
                     # self.eval()
                     # for i in range(len(input_data_list)):
                     #     self.save_traj_results(input_data_list[i], batch_size, output_path + '_epoch%d' % epoch, False, i, index)
@@ -431,8 +453,6 @@ class t_DynAE(nn.Module):
                     
             print(f"Epoch: {epoch}\n")
             print(f"Epoch: {epoch}\n", file=open(log_path, 'a'))
-                
-
 
         total_training_time = time.time() - start
         print(f"Total training time: {total_training_time} s")
@@ -441,36 +461,48 @@ class t_DynAE(nn.Module):
             'state_dict': self.state_dict()}, model_path + f'/model_final_cpt.pt')
         
         return False
-        
-    def output_result(self, train_input0, test_input0, train_input1, test_input1, train_setT, test_setT,
-                     beta_MSE, outputfile, batch_size=32):
 
-        train_resample, test_resample, infer_resample = self.resampling(train_input0, test_input0, infer_set0, save_centers=False, output_path=None, log_path=outputfile)
-        train_permutation = train_resample[torch.randperm((train_resample).shape[0])]
-        test_permutation = test_resample[torch.randperm((test_resample).shape[0])]
-        infer_permutation = infer_resample[torch.randperm((infer_resample).shape[0])]
+    @torch.no_grad()    
+    def output_result(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
+			test_input0, test_input1, test_target0, test_target1, test_setT, 
+			output_path, beta_current, betaT_bins, batch_size=1024):
+
+        log_path = output_path + '/result_log.txt'
+        outputfile = output_path + '/result_loss.txt'
+        train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
 
         train_prior_loss = []
-        test_prior_loss = []
-        infer_prior_loss = []
-        train_mse_loss = []
-        test_mse_loss = []
-        infer_mse_loss = []
+        train_loss = []
+        train_reconstruction_error = []
+        train_sw_loss = []
+
         for i in range(0, len(train_permutation), batch_size):
             if (i+batch_size) > len(train_permutation):
                 print(i+batch_size, len(train_permutation))
                 break
 
             train_indices = train_permutation[i:(i+batch_size)]
-            z0, z1, temp = sample_mini_batch(train_input0, train_input1, train_setT, train_indices, self.device)  # call function from utils
-            train_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
+            temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1,
+                                                        train_target0, train_target1, train_indices, self.device)
 
-            #MSE reconstruction loss
-            if beta_MSE > 0:
-                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                train_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().detach().cpu().numpy()]
+            loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1,
+                                                        target0, target1, betaT_bins=betaT_bins, beta=beta_current)
+
+            train_loss += [loss.detach().cpu().numpy()]
+            train_reconstruction_error += [reconstruction_error.detach().cpu().numpy()]
+            train_sw_loss += [sw_loss.detach().cpu().numpy()]
+            train_prior_loss += [prior_loss.detach().cpu().numpy()]
+
         train_prior_loss = np.mean(train_prior_loss)
-        train_mse_loss = np.mean(train_mse_loss)
+        train_loss = np.mean(train_loss)
+        train_reconstruction_error = np.mean(train_reconstruction_error)
+        train_sw_loss = np.mean(train_sw_loss)
+
+
+        test_prior_loss = []
+        test_loss = []
+        test_reconstruction_error = []
+        test_sw_loss = []
 
         for i in range(0, len(test_permutation), batch_size):
             if (i+batch_size) > len(test_permutation):
@@ -478,42 +510,34 @@ class t_DynAE(nn.Module):
                 break
 
             test_indices = test_permutation[i:(i+batch_size)]
-            z0, z1, temp = sample_mini_batch(test_input0, test_input1, test_setT, test_indices, self.device)  # call function from utils
-            test_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
+            temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(test_setT, test_input0, test_input1,
+                                                        test_target0, test_target1, test_indices, self.device)
 
-            #MSE reconstruction loss
-            if beta_MSE > 0:
-                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                test_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().detach().cpu().numpy()]
+            loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1,
+                                                                target0, target1, betaT_bins=betaT_bins, beta=beta_current)
+
+
+            test_loss += [loss.detach().cpu().numpy()]
+            test_reconstruction_error += [reconstruction_error.detach().cpu().numpy()]
+            test_sw_loss += [sw_loss.detach().cpu().numpy()]
+            test_prior_loss += [prior_loss.detach().cpu().numpy()]
+
         test_prior_loss = np.mean(test_prior_loss)
-        test_mse_loss = np.mean(test_mse_loss)
+        test_loss = np.mean(test_loss)
+        test_reconstruction_error = np.mean(test_reconstruction_error)
+        test_sw_loss = np.mean(test_sw_loss)
 
+        print(f"train_loss: {train_loss}", file=open(outputfile, 'a'))
+        print(f"test_loss: {test_loss}", file=open(outputfile, 'a'))
 
-        for i in range(0, len(infer_permutation), batch_size):
-            if (i+batch_size) > len(infer_permutation):
-                print(i+batch_size, len(infer_permutation))
-                break
+        print(f"train_reconstruction_error: {train_reconstruction_error}", file=open(outputfile, 'a'))
+        print(f"test_reconstruction_error: {test_reconstruction_error}", file=open(outputfile, 'a'))
 
-            infer_indices = infer_permutation[i:(i+batch_size)]
-            z0, z1, temp = sample_mini_batch(infer_set0, infer_set1, infer_setT, infer_indices, self.device)  # call function from utils
-            infer_prior_loss += [self.prior_loss(z0, z1, temp).mean().detach().cpu().numpy()]
-
-            #MSE reconstruction loss
-            if beta_MSE > 0:
-                z1_sampled = self.Langevin_Forward(z0, temp, dt_infer=1)
-                infer_mse_loss += [torch.sum(torch.square(z1_sampled - z1).flatten(start_dim=1),dim=1).mean().detach().cpu().numpy()]
-        infer_prior_loss = np.mean(infer_prior_loss)
-        infer_mse_loss = np.mean(infer_mse_loss)    
-
-        print(f"beta_MSE = {beta_MSE}", file=open(outputfile, 'a'))
+        print(f"train_sw_loss: {train_sw_loss}", file=open(outputfile, 'a'))
+        print(f"test_sw_loss: {test_sw_loss}", file=open(outputfile, 'a'))
 
         print(f"train_prior_loss: {train_prior_loss}", file=open(outputfile, 'a'))
         print(f"test_prior_loss: {test_prior_loss}", file=open(outputfile, 'a'))
-        print(f"infer_prior_loss: {infer_prior_loss}", file=open(outputfile, 'a'))
-
-        print(f"train_mse_loss: {train_mse_loss}", file=open(outputfile, 'a'))
-        print(f"test_mse_loss: {test_mse_loss}", file=open(outputfile, 'a'))
-        print(f"infer_mse_loss: {infer_mse_loss}", file=open(outputfile, 'a'))
 
         return False
 
