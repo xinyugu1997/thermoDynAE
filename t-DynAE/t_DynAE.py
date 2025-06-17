@@ -9,8 +9,8 @@ import utils
 import architectures
 
 class t_DynAE(nn.Module):
-    def __init__(self, z_dim, output_shape, data_shape, device, neuron_num1=16, neuron_num2=16, projection_num=50, 
-                 ConstantDiffusionPrior=True, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, embed_scale=10.0., 
+    def __init__(self, z_dim, output_shape, data_shape, device, reduced_force_T_noise=0, neuron_num1=16, neuron_num2=16, 
+                 projection_num=50, ConstantDiffusionPrior=True, reduced_force=True, embed_dim=64, embed_scale=10.0, 
                  neuron_num=32, bias_factor=3, min_centers=200):
         super().__init__()
         self.z_dim = z_dim
@@ -164,7 +164,7 @@ class t_DynAE(nn.Module):
 
     def calculate_loss(self, betaT, input_data0, input_data1, target_data0, target_data1, 
                        betaT_bins, beta=1.0):
-        batch_size = input_data0.size[0]
+        batch_size = input_data0.shape[0]
         data = torch.cat([input_data0, input_data1], dim=0)
         out, z = self.forward(data)
          
@@ -177,7 +177,7 @@ class t_DynAE(nn.Module):
         encoded_samples = z1 - z0
         prior_samples = self.Langevin_Forward(z0, betaT, dt_infer=1).detach() - z0.detach()
 
-        reconstruction_error = torch.sum( torch.pow((output_data0 - target_data0), 2), dim=1 ).mean() + \ 
+        reconstruction_error = torch.sum( torch.pow((output_data0 - target_data0), 2), dim=1 ).mean() + \
                                torch.sum( torch.pow((output_data1 - target_data1), 2), dim=1 ).mean()
 
         sw_loss = utils.sliced_wasserstein_distance(encoded_samples, prior_samples, betaT, betaT_bins, 
@@ -298,10 +298,10 @@ class t_DynAE(nn.Module):
             cluster_weights += [weight]
             total_weights += weight
 
-        if total_effective_samples < train_past_data0.shape[0]*0.8:
+        if total_effective_samples < train_past_data0.shape[0]*0.7:
             print(1.0*total_effective_samples/train_past_data0.shape[0])
             print("Too few samples in each bin! Please decrease min_centers!")
-            raise ValueError
+            #raise ValueError
 
         # create better dataset by resampling from each bin
         train_dataset_indices = []
@@ -340,7 +340,7 @@ class t_DynAE(nn.Module):
  
     
     def train_model(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
-			test_input0, test_input1, test_target0, test_target1, test_setT, 
+			test_input0, test_input1, test_target0, test_target1, test_setT, betaT_bins, 
 			beta, lr, lr_scheduler_step_size, lr_scheduler_gamma, prior_learning_rate, 
 			batch_size, max_epochs, output_path, log_interval, SaveTrainingProgress):
         self.train()

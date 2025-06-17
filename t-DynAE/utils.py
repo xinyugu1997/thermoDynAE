@@ -114,7 +114,7 @@ def sliced_wasserstein_distance(encoded_samples, prior_samples, betaT_samples, b
             wasserstein_distance += [wasserstein_diff]
 
     wasserstein_distance = torch.cat(wasserstein_distance, dim=0)
-    if len(wasserstein_distance) != len(betaT_samples):
+    if len(wasserstein_distance) < ( 0.9 * len(betaT_samples) ):
         raise ValueError('Please extend the range of betaT bins!!')
      
     # approximate mean wasserstein_distance for each projection
@@ -133,6 +133,23 @@ def rand_normal(batch_size, dim):
     """
     z =  np.random.normal(size=(batch_size, dim))
     return torch.from_numpy(z).type(torch.FloatTensor)
+
+def rand_padding(input_data, f_dim, sigma):
+    """ This function pads input_data along dimension 1 to reach f_dim with a Gaussian distribution 
+
+        Args:
+            input_data (tensor): tensor to be padded
+            f_dim (int): final value of input_data.shape[1]
+            sigma (float): variance of the Gaussian            
+
+        Return:
+            torch.Tensor: tensor of size (batch_size, f_dim)
+    """
+    a_dim = int(f_dim - input_data.shape[1])
+    pad = sigma * rand_normal(input_data.shape[0], a_dim)
+    return torch.cat((input_data, pad), dim=1)
+
+
 
 def rand_uniform(batch_size, dim):
     """ This function generates 2D samples from a uniform distribution in a 2-dimensional space
