@@ -541,3 +541,34 @@ class t_DynAE(nn.Module):
 
         return False
 
+    @torch.no_grad()
+    def save_traj(self, input0, output_path="save_traj.npy", batch_size=128):
+        all_out = []
+        all_z = []
+
+        for i in range(0, len(input0), batch_size):
+              if (i+batch_size) > len(input0):
+                 batch_input = input0[i:].to(self.device)
+              else:
+                 batch_input = input0[i:i+batch_size].to(self.device)
+              out, z = self.forward(batch_input)
+              all_out += [out.cpu()]
+              all_z += [z.cpu()]
+
+        all_out = torch.cat(all_out, dim=0).data.numpy()
+        all_z = torch.cat(all_z, dim=0).data.numpy()
+
+        np.save("out_"+output_path, all_out)
+        np.save("z_"+output_path, all_z)
+
+        return False
+
+    @torch.no_grad()
+    def evolve_full_dynamics(self, z_init, betaT_infer, infer_steps, dt_infer=1, save_path="infer_traj.npy"):
+        z_traj = self.evolve_latent_dynamics(z_init, betaT_infer, infer_steps, dt_infer) 
+        out_traj = self.decode(z_traj)
+
+        np.save("out_"+output_path, out_traj.cpu().data.numpy())
+        np.save("z_"+output_path, z_traj.cpu().data.numpy())
+
+        return False
