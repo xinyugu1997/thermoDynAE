@@ -154,11 +154,12 @@ class t_DynAE(nn.Module):
         z0 = z0.view((-1,self.z_dim))
         betaT = torch.full((len(z0),1), betaT_infer)
         for istep in range(infer_steps):
-            if istep % 10000 == 0:
-                print('Step:', istep, 'Temp:', betaT_infer)
-            z1 = self.Langevin_Forward(z0, betaT, dt_infer)
-            z0 = z1.detach()
-            traj.append(z0)
+           if istep % 10000 == 0:
+                print('Step:', istep, 'Temp:', betaT_infer, 'z:', z0.cpu().data.numpy())
+           z1 = self.Langevin_Forward(z0, betaT, dt_infer)
+           z0 = z1.detach()
+           traj += [z0]
+        traj = torch.cat(traj, dim=0) 
             
         return traj       
 
@@ -465,10 +466,10 @@ class t_DynAE(nn.Module):
     @torch.no_grad()    
     def output_result(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
 			test_input0, test_input1, test_target0, test_target1, test_setT, 
-			output_path, beta_current, betaT_bins, batch_size=1024):
+			output_path, beta_current, betaT_bins, batch_size=1024, index=0):
 
-        log_path = output_path + '/result_log.txt'
-        outputfile = output_path + '/result_loss.txt'
+        log_path = output_path + f'/result_log_{index}.txt'
+        outputfile = output_path + f'/result_loss_{index}.txt'
         train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
 
         train_prior_loss = []
@@ -564,11 +565,22 @@ class t_DynAE(nn.Module):
         return False
 
     @torch.no_grad()
-    def evolve_full_dynamics(self, z_init, betaT_infer, infer_steps, dt_infer=1, save_path="infer_traj.npy"):
+    def evolve_full_dynamics(self, z_init, betaT_infer, infer_steps, dt_infer=1, save_path="infer_traj.npy", batch_size=128):
         z_traj = self.evolve_latent_dynamics(z_init, betaT_infer, infer_steps, dt_infer) 
-        out_traj = self.decode(z_traj)
 
-        np.save("out_"+output_path, out_traj.cpu().data.numpy())
+
+        all_out = []
+        for i in range(0, len(z_traj), batch_size):
+              if (i+batch_size) > len(z_traj):
+                 batch_input = z_traj[i:].to(self.device)
+              else:
+                 batch_input = z_traj[i:i+batch_size].to(self.device)
+              out = self.decode(batch_input)
+              all_out += [out.cpu()]
+
+        out_traj = torch.cat(all_out, dim=0).data.numpy()
+
+        np.save("out_"+output_path, out_traj)
         np.save("z_"+output_path, z_traj.cpu().data.numpy())
 
         return False
