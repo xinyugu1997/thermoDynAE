@@ -543,7 +543,7 @@ class t_DynAE(nn.Module):
         return False
 
     @torch.no_grad()
-    def save_traj(self, input0, output_path="save_traj.npy", batch_size=128):
+    def save_traj(self, input0, save_path, savefile="save_traj.npy", batch_size=128):
         all_out = []
         all_z = []
 
@@ -559,8 +559,8 @@ class t_DynAE(nn.Module):
         all_out = torch.cat(all_out, dim=0).data.numpy()
         all_z = torch.cat(all_z, dim=0).data.numpy()
 
-        np.save("out_"+output_path, all_out)
-        np.save("z_"+output_path, all_z)
+        np.save(save_path+"/out_"+output_path, all_out)
+        np.save(save_path+"/z_"+output_path, all_z)
 
         return False
 
