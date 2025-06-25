@@ -78,7 +78,8 @@ class Langevin_prior(nn.Module):
 
         if ConstantDiffusionPrior:
             print("Constant Diffusion Matrix!!")
-            self.constant_logM = nn.Parameter(torch.randn(1, z_dim))
+            # ConstantDiffusion, without loss of generality, matrix M_ij = delta_ij
+            #self.constant_logM = nn.Parameter(torch.randn(1, z_dim))
         else:
             self.logA_net = nn.Sequential(
                 nn.Linear(z_dim, neuron_num),

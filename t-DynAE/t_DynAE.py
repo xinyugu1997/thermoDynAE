@@ -64,9 +64,10 @@ class t_DynAE(nn.Module):
         force = self.model_prior.prior_force(z0, embed_t)
         
         if self.ConstantDiffusionPrior:
-            logM = self.model_prior.constant_logM
-            M = torch.exp(logM)
-            prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force, 2)/M, dim=1)        
+            #logM = self.model_prior.constant_logM
+            #M = torch.exp(logM)
+            #prior_loss = 0.5*torch.sum(logM + 0.5*betaT*torch.pow(z1 - z0 - M*force, 2)/M, dim=1)        
+            prior_loss = 0.5*torch.sum(0.5*betaT*torch.pow(z1 - z0 - force, 2), dim=1)
             
         else:
             logA = self.model_prior.prior_logA(z0)
@@ -117,9 +118,10 @@ class t_DynAE(nn.Module):
         force = self.model_prior.prior_force(z0, embed_t)
         
         if self.ConstantDiffusionPrior:
-            logM = self.model_prior.constant_logM
-            M = torch.exp(logM) 
-            z1 = z0 + self.reparameterize(M*force*dt_infer, logM-np.log(betaT/2/dt_infer))
+            #logM = self.model_prior.constant_logM
+            #M = torch.exp(logM) 
+            #z1 = z0 + self.reparameterize(M*force*dt_infer, logM-np.log(betaT/2/dt_infer))
+            z1 = z0 + self.reparameterize(force*dt_infer, -np.log(betaT/2/dt_infer))
             
         else:
             logA = self.model_prior.prior_logA(z0)
@@ -559,8 +561,8 @@ class t_DynAE(nn.Module):
         all_out = torch.cat(all_out, dim=0).data.numpy()
         all_z = torch.cat(all_z, dim=0).data.numpy()
 
-        np.save(save_path+"/out_"+output_path, all_out)
-        np.save(save_path+"/z_"+output_path, all_z)
+        np.save(save_path+"/out_"+savefile, all_out)
+        np.save(save_path+"/z_"+savefile, all_z)
 
         return False
 
