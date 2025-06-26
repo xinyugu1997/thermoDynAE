@@ -165,20 +165,21 @@ def rand_uniform(batch_size, dim):
     return torch.from_numpy(z).type(torch.FloatTensor)
 
 @torch.no_grad()
-def RegSpaceClustering(z_data, min_dist=1, min_centers=200, batch_size=128, dist_decay=0.9):
+def RegSpaceClustering(z_data, min_centers=200, batch_size=128, dist_decay=0.9):
     '''
     Regular space clustering.
         Args:
             z_data: ndarray containing (n,d)-shaped float data
             min_centers: the minimum number of cluster centers to be determined, integer greater than 0 required
-            min_dist: the minimal distances between cluster centers
 
         Returns:
             cluster_centers: ndarray containing the cluster centers
     '''
     n_samples, z_dim = z_data.shape    
     cluster_centers = z_data[0:1,:].clone()
-    
+    # initialize min_dist based on data varience
+    min_dist = torch.sqrt(torch.var(z_data, dim=0).sum())/2
+
     while len(cluster_centers) < min_centers:
         cluster_centers = z_data[0:1,:].clone()
         i = 1
