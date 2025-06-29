@@ -67,14 +67,13 @@ class Dense(nn.Module):
 
 class Langevin_prior(nn.Module):
     def __init__(self, z_dim, device, ConstantDiffusionPrior=True, reduced_force=True, 
-                 reduced_force_T_noise=0, embed_dim=64, embed_scale=10., neuron_num=32):
+                 embed_dim=64, embed_scale=10., neuron_num=32):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
         self.neuron_num = neuron_num
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
         self.reduced_force = reduced_force
-        self.reduced_force_T_noise = reduced_force_T_noise
 
         if ConstantDiffusionPrior:
             print("Constant Diffusion Matrix!!")
@@ -97,7 +96,7 @@ class Langevin_prior(nn.Module):
                 nn.ReLU())
 
         if self.reduced_force:
-            print(f"reduced_force, temperature dependent!! T_noise during training:{reduced_force_T_noise}.")
+            print(f"reduced_force, temperature dependent!!")
             print(f"temperature embed_dim:{embed_dim} embed_scale:{embed_scale}")
         self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim, scale=embed_scale),
             nn.Linear(embed_dim, embed_dim))

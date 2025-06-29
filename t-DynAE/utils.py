@@ -134,21 +134,24 @@ def rand_normal(batch_size, dim):
     z =  np.random.normal(size=(batch_size, dim))
     return torch.from_numpy(z).type(torch.FloatTensor)
 
-def rand_padding(input_data, f_dim, sigma):
+def rand_padding(input_data, f_dim, sigma, cum=True):
     """ This function pads input_data along dimension 1 to reach f_dim with a Gaussian distribution 
 
         Args:
             input_data (tensor): tensor to be padded
             f_dim (int): final value of input_data.shape[1]
-            sigma (float): variance of the Gaussian            
+            sigma (float): variance of the Gaussian
+            cum (bool): padding with Brownian motion if True; True by default            
 
         Return:
             torch.Tensor: tensor of size (batch_size, f_dim)
     """
     a_dim = int(f_dim - input_data.shape[1])
-    pad = sigma * rand_normal(input_data.shape[0], a_dim)
+    #pad = sigma * rand_normal(input_data.shape[0], a_dim)
+    pad = sigma * np.random.normal(size=(input_data.shape[0], a_dim)) 
+    if cum:
+        pad = np.cumsum(pad, axis=0)
     return torch.cat((input_data, pad), dim=1)
-
 
 
 def rand_uniform(batch_size, dim):

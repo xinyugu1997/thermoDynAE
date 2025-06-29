@@ -9,7 +9,7 @@ import utils
 import architectures
 
 class t_DynAE(nn.Module):
-    def __init__(self, z_dim, output_shape, data_shape, device, reduced_force_T_noise=0, neuron_num1=16, neuron_num2=16, 
+    def __init__(self, z_dim, output_shape, data_shape, device, neuron_num1=16, neuron_num2=16, 
                  projection_num=50, ConstantDiffusionPrior=True, reduced_force=True, embed_dim=64, embed_scale=10.0, 
                  neuron_num=32, bias_factor=3, min_centers=200):
         super().__init__()
@@ -27,12 +27,11 @@ class t_DynAE(nn.Module):
         self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
         self.reduced_force = reduced_force
-        self.reduced_force_T_noise = reduced_force_T_noise
         
 
         self.model_encoder = architectures.fc_encoder(z_dim, data_shape, neuron_num1)
         self.model_decoder = architectures.fc_decoder(z_dim, output_shape, neuron_num2)
-        self.model_prior = architectures.Langevin_prior(z_dim, device, ConstantDiffusionPrior, reduced_force, reduced_force_T_noise, embed_dim, embed_scale, neuron_num)
+        self.model_prior = architectures.Langevin_prior(z_dim, device, ConstantDiffusionPrior, reduced_force, embed_dim, embed_scale, neuron_num)
 
 
     def encode(self, inputs):
@@ -58,7 +57,7 @@ class t_DynAE(nn.Module):
         z1 = z1.detach()
         z0.requires_grad = True
         if self.reduced_force:
-            embed_t = betaT+self.reduced_force_T_noise*torch.randn_like(betaT)
+            embed_t = betaT		#+self.reduced_force_T_noise*torch.randn_like(betaT)
         else:
             embed_t = torch.zeros_like(betaT)
         force = self.model_prior.prior_force(z0, embed_t)
@@ -294,7 +293,7 @@ class t_DynAE(nn.Module):
             train_cluster_indices += [torch.nonzero(train_cluster_labels == k, as_tuple=True)[0]]
             test_cluster_indices += [torch.nonzero(test_cluster_labels == k, as_tuple=True)[0]]
 
-            if len(train_cluster_indices[k]) > batch_size:
+            if len(train_cluster_indices[k]) > (0.5*batch_size):
                 total_effective_samples += len(train_cluster_indices[k])
 
             weight = np.power(len(train_cluster_indices[k]), 1/self.bias_factor)
@@ -318,7 +317,7 @@ class t_DynAE(nn.Module):
                 train_dataset_indices += [train_cluster_indices[k][
                                               torch.randperm(len(train_cluster_indices[k]))[
                                               :train_dataset_size]]]
-            else:
+            elif len(train_cluster_indices[k]) > (0.5*batch_size):
                 train_dataset_indices += [train_cluster_indices[k][
                                               torch.randint(0, len(train_cluster_indices[k]), (train_dataset_size,))]]
 
@@ -326,7 +325,7 @@ class t_DynAE(nn.Module):
                 test_dataset_indices += [test_cluster_indices[k][
                                              torch.randperm(len(test_cluster_indices[k]))[
                                              :test_dataset_size]]]
-            elif test_cluster_indices[k].shape[0] > 0:
+            elif len(test_cluster_indices[k]) > (0.5*batch_size):
                 test_dataset_indices += [test_cluster_indices[k][
                                              torch.randint(0, len(test_cluster_indices[k]), (test_dataset_size,))]]
 
