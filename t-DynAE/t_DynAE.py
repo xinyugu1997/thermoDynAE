@@ -165,7 +165,7 @@ class t_DynAE(nn.Module):
         return traj       
 
     def calculate_loss(self, betaT, input_data0, input_data1, target_data0, target_data1, 
-                       betaT_bins, beta=1.0):
+                       betaT_bins, beta=1.0, use_TICA=False, TICA=None, rbetaT=None):
         batch_size = input_data0.shape[0]
         data = torch.cat([input_data0, input_data1], dim=0)
         out, z = self.forward(data)
@@ -179,8 +179,17 @@ class t_DynAE(nn.Module):
         encoded_samples = z1 - z0
         prior_samples = self.Langevin_Forward(z0, betaT, dt_infer=1).detach() - z0.detach()
 
-        reconstruction_error = torch.sum( torch.pow((output_data0 - target_data0), 2), dim=1 ).mean() + \
-                               torch.sum( torch.pow((output_data1 - target_data1), 2), dim=1 ).mean()
+        if use_TICA:
+                tica_output_data0 = utils.proj_TICA(output_data0, betaT, rbetaT, TICA)
+                tica_output_data1 = utils.proj_TICA(output_data1, betaT, rbetaT, TICA)
+                tica_target_data0 = utils.proj_TICA(target_data0, betaT, rbetaT, TICA)
+                tica_target_data1 = utils.proj_TICA(target_data1, betaT, rbetaT, TICA)
+                reconstruction_error = torch.sum( torch.pow((tica_output_data0 - tica_target_data0), 2), dim=1 ).mean() + \
+                                       torch.sum( torch.pow((tica_output_data1 - tica_target_data1), 2), dim=1 ).mean()
+ 
+        else:
+                reconstruction_error = torch.sum( torch.pow((output_data0 - target_data0), 2), dim=1 ).mean() + \
+                                       torch.sum( torch.pow((output_data1 - target_data1), 2), dim=1 ).mean()
 
         sw_loss = utils.sliced_wasserstein_distance(encoded_samples, prior_samples, betaT, betaT_bins, 
                                                     self.projection_num, device=self.device)
@@ -344,7 +353,7 @@ class t_DynAE(nn.Module):
     def train_model(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
 			test_input0, test_input1, test_target0, test_target1, test_setT, betaT_bins, 
 			beta, lr, lr_scheduler_step_size, lr_scheduler_gamma, prior_learning_rate, 
-			batch_size, max_epochs, output_path, log_interval, SaveTrainingProgress):
+			batch_size, max_epochs, output_path, log_interval, SaveTrainingProgress, use_TICA=False, TICA=None, rbetaT=None):
         self.train()
 
         step = 0        # steps of model updates
@@ -389,7 +398,7 @@ class t_DynAE(nn.Module):
 							train_target0, train_target1, train_indices, self.device)
 
                 loss, reconstruction_error, sw_loss, prior_loss = self.calculate_loss(temp, input0, input1, 
-							target0, target1, betaT_bins=betaT_bins, beta=beta_current)
+							target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
                 
                 if (torch.isnan(loss).any()):
                     print("NAN in training loss")
@@ -428,7 +437,7 @@ class t_DynAE(nn.Module):
 								test_target0, test_target1, test_indices, self.device)
 
                     test_loss, test_reconstruction_error, test_sw_loss, test_prior_loss  = self.calculate_loss(temp, input0, input1, 
-								target0, target1, betaT_bins=betaT_bins, beta=beta_current)
+								target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
 
                     print(f" loss (test) {test_loss}\t reconstruction_err {test_reconstruction_error}\t \
 				sw_loss {test_sw_loss}\t prior_loss {test_prior_loss}")
@@ -467,7 +476,7 @@ class t_DynAE(nn.Module):
     @torch.no_grad()    
     def output_result(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
 			test_input0, test_input1, test_target0, test_target1, test_setT, 
-			output_path, beta_current, betaT_bins, batch_size=1024, index=0):
+			output_path, beta_current, betaT_bins, batch_size=1024, index=0, use_TICA=False, TICA=None, rbetaT=None):
 
         log_path = output_path + f'/result_log_{index}.txt'
         outputfile = output_path + f'/result_loss_{index}.txt'
@@ -488,7 +497,7 @@ class t_DynAE(nn.Module):
                                                         train_target0, train_target1, train_indices, self.device)
 
             loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1,
-                                                        target0, target1, betaT_bins=betaT_bins, beta=beta_current)
+                                                        target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
 
             train_loss += [loss.detach().cpu().numpy()]
             train_reconstruction_error += [reconstruction_error.detach().cpu().numpy()]
@@ -516,7 +525,7 @@ class t_DynAE(nn.Module):
                                                         test_target0, test_target1, test_indices, self.device)
 
             loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1,
-                                                                target0, target1, betaT_bins=betaT_bins, beta=beta_current)
+                                                                target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
 
 
             test_loss += [loss.detach().cpu().numpy()]

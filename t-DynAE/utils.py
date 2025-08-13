@@ -9,6 +9,17 @@ https://arxiv.org/abs/2209.00905
 """
 import torch
 import numpy as np
+import pyemma
+
+def TICA_prep(traj_data, lag=100):
+    # traj_data should be (Nframes, dim_X) shaped
+    traj_meaned = traj_data - np.mean(traj_data, axis=0)
+    tica = pyemma.coordinates.tica(traj_meaned, lag, var_cutoff=1)
+    eigenvectors = tica.eigenvectors
+
+    # output mean_free traj_data and column-wise tica eigenvectors
+    return traj_meaned, eigenvectors   
+
 
 def data_init(traj_data, traj_target, traj_betaT, t0=0, dt=0):
     # This function generates the datasets for training
@@ -103,8 +114,10 @@ def sliced_wasserstein_distance(encoded_samples, prior_samples, betaT_samples, b
     # per random projection # for each betaT bin
     
     wasserstein_distance = []
+    #ratio_betaT_bins = []
     for ibeta in range(1, len(betaT_bins)):
         T_index = np.where((betaT_samples < betaT_bins[ibeta]) & (betaT_samples >= betaT_bins[ibeta-1]))[0]
+        #ratio_betaT_bins.append(len(T_index))
         if len(T_index) > 0:
             wasserstein_diff = (torch.sort(encoded_projections[T_index], dim=0)[0] -
                                     torch.sort(prior_projections[T_index], dim=0)[0])
@@ -116,9 +129,39 @@ def sliced_wasserstein_distance(encoded_samples, prior_samples, betaT_samples, b
     wasserstein_distance = torch.cat(wasserstein_distance, dim=0)
     if len(wasserstein_distance) < ( 0.9 * len(betaT_samples) ):
         raise ValueError('Please extend the range of betaT bins!!')
-     
+    
+    #print("ratio_betaT_bins:", np.array(ratio_betaT_bins)/len(encoded_samples))
+ 
     # approximate mean wasserstein_distance for each projection
     return wasserstein_distance.mean()
+
+
+# If using TICA mode, input X for each traj must be mean-free for TICA and training
+def proj_TICA(X, b, vb, mTICA):
+    """
+    Args:
+        X:      (N, m)      full coord batch
+        b:      (N, 1)      betaT batch
+        vb:     (L)         reference betaT
+        mTICA:  (L, m, m)   per-betaT TICA transformation matrices, torch.stack([ev,ev,...,ev],dim=0), ev: columnwise eigenvectors
+
+    Returns:
+        (N, m) TICA projection batch
+    """
+    # scaled sharp softmax to find reference betaT-TICA
+    if len(vb) == 1:   # single training temperature
+       scale = 1
+    else:
+       scale = (torch.max(vb) - torch.min(vb)) /100
+    diff_sq = ((b - vb)/scale) ** 2  
+    weights = torch.softmax(-diff_sq, dim=1)
+ 
+    # find reference betaT-TICA (batch_size × m × m)
+    TICAs = torch.einsum('nl,lmk->nmk', weights.float(), mTICA)  # (N, m, m)
+    # projecting
+    out = torch.einsum('nk,nkm->nm', X, TICAs) # (N, m)
+
+    return out
 
 
 def rand_normal(batch_size, dim):
@@ -151,6 +194,9 @@ def rand_padding(input_data, f_dim, sigma, cum=True):
     pad = sigma * np.random.normal(size=(input_data.shape[0], a_dim)) 
     if cum:
         pad = np.cumsum(pad, axis=0)
+        pad = (pad - np.mean(pad, axis=0))/np.std(pad, axis=0)  #whitening
+
+    pad = torch.from_numpy(pad).type(torch.FloatTensor)
     return torch.cat((input_data, pad), dim=1)
 
 
