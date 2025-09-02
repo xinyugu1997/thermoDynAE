@@ -160,9 +160,10 @@ class t_DynAE(nn.Module):
            z1 = self.Langevin_Forward(z0, betaT, dt_infer)
            z0 = z1.detach()
            traj += [z0]
-        traj = torch.cat(traj, dim=0) 
+        traj = torch.cat(traj, dim=0)
+        out = self.decode(traj).detach()
             
-        return traj       
+        return traj, out       
 
     def calculate_loss(self, betaT, input_data0, input_data1, target_data0, target_data1, 
                        betaT_bins, beta=1.0, use_TICA=False, TICA=None, rbetaT=None):
@@ -204,6 +205,24 @@ class t_DynAE(nn.Module):
 
 
         return loss, reconstruction_error.detach(), sw_loss.detach(), prior_loss 
+
+
+
+    def calculate_prior_loss(self, betaT, input_data0, input_data1): 
+        batch_size = input_data0.shape[0]
+        data = torch.cat([input_data0, input_data1], dim=0)
+        out, z = self.forward(data)
+
+        z0 = z[:batch_size]
+        z1 = z[batch_size:]
+
+        # detach the graph from encoder
+        z0_detached = z0.detach()
+        z1_detached = z1.detach()
+
+        prior_loss = self.prior_loss(z0_detached, z1_detached, betaT)
+
+        return prior_loss
 
     @torch.no_grad()
     def get_cluster_centers(self, train_input_data, test_input_data, save_centers=False, log_path=None, batch_size=128):
@@ -353,7 +372,8 @@ class t_DynAE(nn.Module):
     def train_model(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
 			test_input0, test_input1, test_target0, test_target1, test_setT, betaT_bins, 
 			beta, lr, lr_scheduler_step_size, lr_scheduler_gamma, prior_learning_rate, 
-			batch_size, max_epochs, output_path, log_interval, SaveTrainingProgress, use_TICA=False, TICA=None, rbetaT=None):
+			batch_size, max_epochs, output_path, log_interval, SaveTrainingProgress, 
+                        use_TICA=False, TICA=None, rbetaT=None, prior_boost=False):
         self.train()
 
         step = 0        # steps of model updates
@@ -387,19 +407,40 @@ class t_DynAE(nn.Module):
             else:
                 train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
 
+
+            # prior boost is applied to better capture the whole latent space during prior learning
+            if prior_boost:
+                prior_train_permutation = train_permutation[torch.randperm(train_permutation.shape[0])]
+                prior_test_permutation = test_permutation[torch.randperm(test_permutation.shape[0])]
+
             for i in range(0, len(train_permutation), batch_size):
                 step += 1
                 if (i+batch_size) > len(train_permutation):
                     print(i+batch_size, len(train_permutation))
                     break
-                
-                train_indices = train_permutation[i:(i+batch_size)]
-                temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1, 
-							train_target0, train_target1, train_indices, self.device)
 
-                loss, reconstruction_error, sw_loss, prior_loss = self.calculate_loss(temp, input0, input1, 
-							target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
-                
+                if not prior_boost:                
+                    train_indices = train_permutation[i:(i+batch_size)]
+                    temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1, 
+    							train_target0, train_target1, train_indices, self.device)
+    
+                    loss, reconstruction_error, sw_loss, prior_loss = self.calculate_loss(temp, input0, input1, 
+    							target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+                else:
+                    train_indices = train_permutation[i:(i+batch_size)]
+                    prior_indices = prior_train_permutation[i:(i+batch_size)]
+
+                    temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1,
+                                                        train_target0, train_target1, train_indices, self.device)
+
+                    loss, reconstruction_error, sw_loss, _ = self.calculate_loss(temp, input0, input1,
+                                                        target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+
+                    temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1,
+                                                        train_target0, train_target1, prior_indices, self.device)
+
+                    prior_loss = self.calculate_prior_loss(temp, input0, input1,)
+
                 if (torch.isnan(loss).any()):
                     print("NAN in training loss")
                     return True
@@ -431,14 +472,31 @@ class t_DynAE(nn.Module):
                     j = i%len(test_permutation)
                     if (j+batch_size) > len(test_permutation):
                         j = len(test_permutation) - batch_size
-                        
-                    test_indices = test_permutation[j:(j+batch_size)]
-                    temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(test_setT, test_input0, test_input1, 
-								test_target0, test_target1, test_indices, self.device)
 
-                    test_loss, test_reconstruction_error, test_sw_loss, test_prior_loss  = self.calculate_loss(temp, input0, input1, 
-								target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
 
+                    if not prior_boost:
+                        test_indices = test_permutation[j:(j+batch_size)]
+                        temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(test_setT, test_input0, test_input1,
+                                                            test_target0, test_target1, test_indices, self.device)
+    
+                        test_loss, test_reconstruction_error, test_sw_loss, test_prior_loss = self.calculate_loss(temp, input0, input1,
+                                                            target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+                    else:
+                        test_indices = test_permutation[j:(j+batch_size)]
+                        prior_indices = prior_test_permutation[j:(j+batch_size)]
+    
+                        temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(test_setT, test_input0, test_input1,
+                                                            test_target0, test_target1, test_indices, self.device)
+    
+                        test_loss, test_reconstruction_error, test_sw_loss, _ = self.calculate_loss(temp, input0, input1,
+                                                            target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+    
+                        temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(test_setT, test_input0, test_input1,
+                                                            test_target0, test_target1, prior_indices, self.device)
+    
+                        test_prior_loss = self.calculate_prior_loss(temp, input0, input1,)
+
+                    
                     print(f" loss (test) {test_loss}\t reconstruction_err {test_reconstruction_error}\t \
 				sw_loss {test_sw_loss}\t prior_loss {test_prior_loss}")
                     print(f" loss (test) {test_loss}\t reconstruction_err {test_reconstruction_error}\t \

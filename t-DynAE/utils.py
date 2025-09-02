@@ -13,12 +13,13 @@ import pyemma
 
 def TICA_prep(traj_data, lag=100):
     # traj_data should be (Nframes, dim_X) shaped
-    traj_meaned = traj_data - np.mean(traj_data, axis=0)
+    traj_mean = np.mean(traj_data, axis=0)
+    traj_meaned = traj_data - traj_mean
     tica = pyemma.coordinates.tica(traj_meaned, lag, var_cutoff=1)
     eigenvectors = tica.eigenvectors
 
     # output mean_free traj_data and column-wise tica eigenvectors
-    return traj_meaned, eigenvectors   
+    return traj_mean, eigenvectors   
 
 
 def data_init(traj_data, traj_target, traj_betaT, t0=0, dt=0):
@@ -136,14 +137,14 @@ def sliced_wasserstein_distance(encoded_samples, prior_samples, betaT_samples, b
     return wasserstein_distance.mean()
 
 
-# If using TICA mode, input X for each traj must be mean-free for TICA and training
-def proj_TICA(X, b, vb, mTICA):
+def proj_TICA(X, b, vb, mTICA, vMEAN):
     """
     Args:
         X:      (N, m)      full coord batch
         b:      (N, 1)      betaT batch
         vb:     (L)         reference betaT
         mTICA:  (L, m, m)   per-betaT TICA transformation matrices, torch.stack([ev,ev,...,ev],dim=0), ev: columnwise eigenvectors
+        vMEAN:  (L, m)      per-betaT TICA mean vectors
 
     Returns:
         (N, m) TICA projection batch
@@ -153,16 +154,16 @@ def proj_TICA(X, b, vb, mTICA):
        scale = 1
     else:
        scale = (torch.max(vb) - torch.min(vb)) /100
-    diff_sq = ((b - vb)/scale) ** 2  
+    diff_sq = ((b - vb)/scale) ** 2
     weights = torch.softmax(-diff_sq, dim=1)
- 
+
     # find reference betaT-TICA (batch_size × m × m)
     TICAs = torch.einsum('nl,lmk->nmk', weights.float(), mTICA)  # (N, m, m)
+    MEANs = torch.einsum('nl,lm->nm', weights.float(), vMEAN)  # (N, m, m)
     # projecting
-    out = torch.einsum('nk,nkm->nm', X, TICAs) # (N, m)
+    out = torch.einsum('nk,nkm->nm', X-MEANs, TICAs) # (N, m)
 
     return out
-
 
 def rand_normal(batch_size, dim):
     """ This function generates 2D samples from a uniform distribution in a 2-dimensional space
