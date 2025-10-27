@@ -166,7 +166,7 @@ class t_DynAE(nn.Module):
         return traj, out       
 
     def calculate_loss(self, betaT, input_data0, input_data1, target_data0, target_data1, 
-                       betaT_bins, beta=1.0, use_TICA=False, TICA=None, rbetaT=None):
+                       betaT_bins, beta=1.0, use_TICA=False, TICA=None, TICA_mean=None, rbetaT=None):
         batch_size = input_data0.shape[0]
         data = torch.cat([input_data0, input_data1], dim=0)
         out, z = self.forward(data)
@@ -181,10 +181,10 @@ class t_DynAE(nn.Module):
         prior_samples = self.Langevin_Forward(z0, betaT, dt_infer=1).detach() - z0.detach()
 
         if use_TICA:
-                tica_output_data0 = utils.proj_TICA(output_data0, betaT, rbetaT, TICA)
-                tica_output_data1 = utils.proj_TICA(output_data1, betaT, rbetaT, TICA)
-                tica_target_data0 = utils.proj_TICA(target_data0, betaT, rbetaT, TICA)
-                tica_target_data1 = utils.proj_TICA(target_data1, betaT, rbetaT, TICA)
+                tica_output_data0 = utils.proj_TICA(output_data0, betaT, rbetaT, TICA, TICA_mean)
+                tica_output_data1 = utils.proj_TICA(output_data1, betaT, rbetaT, TICA, TICA_mean)
+                tica_target_data0 = utils.proj_TICA(target_data0, betaT, rbetaT, TICA, TICA_mean)
+                tica_target_data1 = utils.proj_TICA(target_data1, betaT, rbetaT, TICA, TICA_mean)
                 reconstruction_error = torch.sum( torch.pow((tica_output_data0 - tica_target_data0), 2), dim=1 ).mean() + \
                                        torch.sum( torch.pow((tica_output_data1 - tica_target_data1), 2), dim=1 ).mean()
  
@@ -367,13 +367,78 @@ class t_DynAE(nn.Module):
             torch.randperm((test_dataset_indices).shape[0])].flatten()
 
         return train_indices, test_indices
+
+
+    def resampling_fast_epoch(self, train_past_data0, test_past_data0, save_centers, output_path, log_path, index=0, batch_size=128):
+        '''
+        Uniformly discretizing the latent space and resampling the dataset one batch from each cluster.
+            Args:
+                train_past_data0: ndarray containing (n,d)-shaped float data for training
+                test_past_data0: ndarray containing (n,d)-shaped float data for test
+                save_centers: bool, whether to save cluster centers
+                output_path: str
+                log_path: str
+                index: int, random seed number
+
+            Returns:
+                train_indices: the resampled indices of training dataset
+                test_indices the resampled indices of test dataset
+        '''
+
+        # discretize the latent space into bins using regular clustering
+        output_variables = self.get_cluster_centers(train_past_data0, test_past_data0, save_centers=save_centers, log_path=log_path)
+
+        train_cluster_labels, test_cluster_labels = output_variables[0], output_variables[1]
+
+        # output z cluster centers
+        if save_centers:
+            cluster_centers = output_variables[2]
+            z_cluster_center_path = output_path + '_z_cluster_centers' + str(index) + '.npy'
+            np.save(z_cluster_center_path, cluster_centers.cpu().data.numpy())
+
+        num_cluster = int(torch.max(train_cluster_labels).cpu().numpy()) + 1
+
+        # create better dataset by resampling from each bin
+        train_dataset_indices = []
+        test_dataset_indices = []
+
+        for k in range(num_cluster):
+            train_dataset_size = batch_size
+            test_dataset_size = batch_size
+
+            if len(train_cluster_indices[k]) >= train_dataset_size:
+                train_dataset_indices += [train_cluster_indices[k][
+                                              torch.randperm(len(train_cluster_indices[k]))[
+                                              :train_dataset_size]]]
+            elif len(train_cluster_indices[k]) > (0.5*batch_size):
+                train_dataset_indices += [train_cluster_indices[k][
+                                              torch.randint(0, len(train_cluster_indices[k]), (train_dataset_size,))]]
+
+            if len(test_cluster_indices[k]) >= test_dataset_size:
+                test_dataset_indices += [test_cluster_indices[k][
+                                             torch.randperm(len(test_cluster_indices[k]))[
+                                             :test_dataset_size]]]
+            elif len(test_cluster_indices[k]) > (0.5*batch_size):
+                test_dataset_indices += [test_cluster_indices[k][
+                                             torch.randint(0, len(test_cluster_indices[k]), (test_dataset_size,))]]
+
+
+        train_dataset_indices = torch.cat(train_dataset_indices, dim=0).reshape((-1, batch_size))
+        test_dataset_indices = torch.cat(test_dataset_indices, dim=0).reshape((-1, batch_size))
+
+        train_indices = train_dataset_indices[
+            torch.randperm((train_dataset_indices).shape[0])].flatten()
+        test_indices = test_dataset_indices[
+            torch.randperm((test_dataset_indices).shape[0])].flatten()
+
+        return train_indices, test_indices
  
     
     def train_model(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
 			test_input0, test_input1, test_target0, test_target1, test_setT, betaT_bins, 
 			beta, lr, lr_scheduler_step_size, lr_scheduler_gamma, prior_learning_rate, 
 			batch_size, max_epochs, output_path, log_interval, SaveTrainingProgress, 
-                        use_TICA=False, TICA=None, rbetaT=None, prior_boost=False):
+                        use_TICA=False, TICA=None, TICA_mean=None, rbetaT=None, prior_boost=False, fast_epoch=0):
         self.train()
 
         step = 0        # steps of model updates
@@ -394,18 +459,34 @@ class t_DynAE(nn.Module):
         prior_optimizer = torch.optim.Adam(self.model_prior.parameters(),lr=prior_learning_rate,)        
         
         while epoch < max_epochs:
-            if epoch == 0:
-                train_permutation = torch.randperm(train_input0.shape[0])
-                test_permutation = torch.randperm(test_input0.shape[0])
-
-            elif epoch == 1:
-                beta_current = beta
-                optimizer = torch.optim.Adam(chain(self.model_encoder.parameters(), self.model_decoder.parameters()), lr=lr)
-                scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
-                train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
-
+            if fast_epoch == 0:
+                if epoch == 0:
+                    train_permutation = torch.randperm(train_input0.shape[0])
+                    test_permutation = torch.randperm(test_input0.shape[0])
+   
+                elif epoch == 1:
+                    beta_current = beta
+                    optimizer = torch.optim.Adam(chain(self.model_encoder.parameters(), self.model_decoder.parameters()), lr=lr)
+                    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
+                    train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
+   
+                else:
+                    train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
             else:
-                train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
+                if epoch == 0:
+                    fast_epoch_N = int(self.min_centers * batch_size)
+                    train_permutation = torch.randperm(train_input0.shape[0])[:fast_epoch_N]
+                    test_permutation = torch.randperm(test_input0.shape[0])[:fast_epoch_N]
+
+                elif epoch == 1:
+                    beta_current = beta
+                    optimizer = torch.optim.Adam(chain(self.model_encoder.parameters(), self.model_decoder.parameters()), lr=lr)
+                    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
+                    train_permutation, test_permutation = self.resampling_fast_epoch(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
+                elif epoch <= fast_epoch:
+                    train_permutation, test_permutation = self.resampling_fast_epoch(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)             
+                else:
+                    train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
 
 
             # prior boost is applied to better capture the whole latent space during prior learning
@@ -425,7 +506,7 @@ class t_DynAE(nn.Module):
     							train_target0, train_target1, train_indices, self.device)
     
                     loss, reconstruction_error, sw_loss, prior_loss = self.calculate_loss(temp, input0, input1, 
-    							target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+    							target0, target1, betaT_bins, beta_current, use_TICA, TICA, TICA_mean, rbetaT)
                 else:
                     train_indices = train_permutation[i:(i+batch_size)]
                     prior_indices = prior_train_permutation[i:(i+batch_size)]
@@ -434,7 +515,7 @@ class t_DynAE(nn.Module):
                                                         train_target0, train_target1, train_indices, self.device)
 
                     loss, reconstruction_error, sw_loss, _ = self.calculate_loss(temp, input0, input1,
-                                                        target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+                                                        target0, target1, betaT_bins, beta_current, use_TICA, TICA, TICA_mean, rbetaT)
 
                     temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(train_setT, train_input0, train_input1,
                                                         train_target0, train_target1, prior_indices, self.device)
@@ -480,7 +561,7 @@ class t_DynAE(nn.Module):
                                                             test_target0, test_target1, test_indices, self.device)
     
                         test_loss, test_reconstruction_error, test_sw_loss, test_prior_loss = self.calculate_loss(temp, input0, input1,
-                                                            target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+                                                            target0, target1, betaT_bins, beta_current, use_TICA, TICA, TICA_mean, rbetaT)
                     else:
                         test_indices = test_permutation[j:(j+batch_size)]
                         prior_indices = prior_test_permutation[j:(j+batch_size)]
@@ -489,7 +570,7 @@ class t_DynAE(nn.Module):
                                                             test_target0, test_target1, test_indices, self.device)
     
                         test_loss, test_reconstruction_error, test_sw_loss, _ = self.calculate_loss(temp, input0, input1,
-                                                            target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+                                                            target0, target1, betaT_bins, beta_current, use_TICA, TICA, TICA_mean, rbetaT)
     
                         temp, input0, input1, target0, target1 = utils.sample_pairwise_minibatch(test_setT, test_input0, test_input1,
                                                             test_target0, test_target1, prior_indices, self.device)
@@ -534,7 +615,7 @@ class t_DynAE(nn.Module):
     @torch.no_grad()    
     def output_result(self, train_input0, train_input1, train_target0, train_target1, train_setT, 
 			test_input0, test_input1, test_target0, test_target1, test_setT, 
-			output_path, beta_current, betaT_bins, batch_size=1024, index=0, use_TICA=False, TICA=None, rbetaT=None):
+			output_path, beta_current, betaT_bins, batch_size=1024, index=0, use_TICA=False, TICA=None, TICA_mean=None, rbetaT=None):
 
         log_path = output_path + f'/result_log_{index}.txt'
         outputfile = output_path + f'/result_loss_{index}.txt'
@@ -555,7 +636,7 @@ class t_DynAE(nn.Module):
                                                         train_target0, train_target1, train_indices, self.device)
 
             loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1,
-                                                        target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+                                                        target0, target1, betaT_bins, beta_current, use_TICA, TICA, TICA_mean, rbetaT)
 
             train_loss += [loss.detach().cpu().numpy()]
             train_reconstruction_error += [reconstruction_error.detach().cpu().numpy()]
@@ -583,7 +664,7 @@ class t_DynAE(nn.Module):
                                                         test_target0, test_target1, test_indices, self.device)
 
             loss, reconstruction_error, sw_loss, prior_loss  = self.calculate_loss(temp, input0, input1,
-                                                                target0, target1, betaT_bins, beta_current, use_TICA, TICA, rbetaT)
+                                                                target0, target1, betaT_bins, beta_current, use_TICA, TICA, TICA_mean, rbetaT)
 
 
             test_loss += [loss.detach().cpu().numpy()]

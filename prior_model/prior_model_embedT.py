@@ -11,7 +11,10 @@ import utils
 def data_pair_with_betaT(data_set, betaT):
     data0 = data_set[:-1]
     data1 = data_set[1:]
-    dataT = torch.full((len(data0), 1), betaT)
+    if len(betaT.size()) == 0:  #betaT was input as a scalar for the traj
+       dataT = torch.full((len(data0), 1), betaT)
+    else:
+       dataT = betaT[:-1]
     assert len(data0) == len(data1)
     assert len(data0) == len(dataT)
     
@@ -66,7 +69,7 @@ class Dense(nn.Module):
 
 # architecture
 class prior_model(nn.Module):
-    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, reduced_force_T_noise=0, embed_dim=64, embed_scale=5., neuron_num=32, bias_factor=3):
+    def __init__(self, z_dim, device, ConstantDiffusionPrior=False, reduced_force=True, embed_dim=64, embed_scale=5., neuron_num=32, bias_factor=3):
         super().__init__()
         self.z_dim = z_dim
         self.device = device
@@ -74,7 +77,6 @@ class prior_model(nn.Module):
         self.bias_factor = bias_factor
         self.ConstantDiffusionPrior = ConstantDiffusionPrior
         self.reduced_force = reduced_force
-        self.reduced_force_T_noise = reduced_force_T_noise
         
         if ConstantDiffusionPrior:
             print("Constant Diffusion!!")
@@ -96,7 +98,7 @@ class prior_model(nn.Module):
             nn.ReLU())
 
         if self.reduced_force:
-            print(f"reduced_force, temperature dependent!! T_noise during training:{reduced_force_T_noise}.")
+            print(f"reduced_force, temperature dependent!! ")
             print(f"temperature embed_dim:{embed_dim} embed_scale:{embed_scale}")
         self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim, scale=embed_scale),
             nn.Linear(embed_dim, embed_dim))
@@ -131,7 +133,7 @@ class prior_model(nn.Module):
         z0 = z0.detach()
         z0.requires_grad = True
         if self.reduced_force:
-            embed_t = betaT+self.reduced_force_T_noise*torch.randn_like(betaT)
+            embed_t = betaT    #+self.reduced_force_T_noise*torch.randn_like(betaT)
         else:
             embed_t = torch.zeros_like(betaT)
         force = self.prior_force(z0, embed_t)
@@ -224,7 +226,8 @@ class prior_model(nn.Module):
             z1 = self.Langevin_Forward(z0, betaT, dt_infer)
             z0 = z1.detach()
             traj.append(z0)
-            
+        traj = torch.cat(traj, dim=0)
+
         return traj       
 
 
