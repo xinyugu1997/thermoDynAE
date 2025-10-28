@@ -490,7 +490,7 @@ class t_DynAE(nn.Module):
                     optimizer = torch.optim.Adam(chain(self.model_encoder.parameters(), self.model_decoder.parameters()), lr=lr)
                     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
                     train_permutation, test_permutation = self.resampling_fast_epoch(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
-                elif epoch < fast_epoch:
+                elif epoch <= fast_epoch:
                     train_permutation, test_permutation = self.resampling_fast_epoch(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)             
                 else:
                     train_permutation, test_permutation = self.resampling(train_input0, test_input0, batch_size=batch_size, save_centers=False, output_path=output_path, log_path=log_path)
